@@ -1,9 +1,8 @@
 streamlit
 yfinance
-pandas_ta
 scikit-learn
 pytz
 numpy
 pandas
 joblib
-plotly
+ta
