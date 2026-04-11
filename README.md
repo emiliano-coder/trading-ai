@@ -1,1 +1,1 @@
-# trading-ai
+# MIMI-ai
