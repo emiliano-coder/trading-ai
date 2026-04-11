@@ -2,8 +2,8 @@ streamlit
 yfinance
 pandas_ta
 scikit-learn
-tensorflow-cpu
 pytz
 numpy
 pandas
 joblib
+plotly
