@@ -1,6 +1,6 @@
 streamlit
-yfinance==0.2.40
-pandas-ta==0.3.14b
+yfinance
+pandas_ta
 scikit-learn
 tensorflow-cpu
 pytz
