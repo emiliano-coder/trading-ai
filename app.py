@@ -15,71 +15,43 @@ warnings.filterwarnings('ignore')
 
 st.set_page_config(page_title="MIMI-AI | XAU/USD", page_icon="gold", layout="wide")
 
-# ── TEMAS DE COLOR ──
 TEMAS = {
-    "Dorado (default)": {
-        "primario": "#FFD700", "fondo_banner": "#0a0a0a",
-        "borde": "#2a2a00", "titulo": "#FFD700", "acento": "#FFA500"
-    },
-    "Intenso — Neon Verde": {
-        "primario": "#00FF88", "fondo_banner": "#001a0d",
-        "borde": "#003319", "titulo": "#00FF88", "acento": "#00CC66"
-    },
-    "Intenso — Cyan": {
-        "primario": "#00FFFF", "fondo_banner": "#001a1a",
-        "borde": "#003333", "titulo": "#00FFFF", "acento": "#00CCCC"
-    },
-    "Intenso — Magenta": {
-        "primario": "#FF00FF", "fondo_banner": "#1a001a",
-        "borde": "#330033", "titulo": "#FF00FF", "acento": "#CC00CC"
-    },
-    "Pastel — Lavanda": {
-        "primario": "#C3B1E1", "fondo_banner": "#0f0d14",
-        "borde": "#1e1a2e", "titulo": "#C3B1E1", "acento": "#A89AC8"
-    },
-    "Pastel — Rosa": {
-        "primario": "#FFB3C6", "fondo_banner": "#140d0f",
-        "borde": "#2e1a1e", "titulo": "#FFB3C6", "acento": "#FF8FAB"
-    },
-    "Pastel — Menta": {
-        "primario": "#B5EAD7", "fondo_banner": "#0d1410",
-        "borde": "#1a2e22", "titulo": "#B5EAD7", "acento": "#8ED4BC"
-    },
+    "Dorado (default)": {"primario":"#FFD700","fondo_banner":"#0a0a0a","borde":"#2a2a00","acento":"#FFA500"},
+    "Intenso — Neon Verde": {"primario":"#00FF88","fondo_banner":"#001a0d","borde":"#003319","acento":"#00CC66"},
+    "Intenso — Cyan": {"primario":"#00FFFF","fondo_banner":"#001a1a","borde":"#003333","acento":"#00CCCC"},
+    "Intenso — Magenta": {"primario":"#FF00FF","fondo_banner":"#1a001a","borde":"#330033","acento":"#CC00CC"},
+    "Pastel — Lavanda": {"primario":"#C3B1E1","fondo_banner":"#0f0d14","borde":"#1e1a2e","acento":"#A89AC8"},
+    "Pastel — Rosa": {"primario":"#FFB3C6","fondo_banner":"#140d0f","borde":"#2e1a1e","acento":"#FF8FAB"},
+    "Pastel — Menta": {"primario":"#B5EAD7","fondo_banner":"#0d1410","borde":"#1a2e22","acento":"#8ED4BC"},
 }
 
-# ── SIDEBAR ──
 with st.sidebar:
     st.markdown("## MIMI-AI")
     st.markdown("---")
-
     tema_sel = st.selectbox("Tema de color", list(TEMAS.keys()))
     tema = TEMAS[tema_sel]
-
     st.markdown("---")
     st.markdown("### Guia de MIMI-AI")
-
     guia_items = {
-        "Que es MIMI-AI": "MIMI-AI es un sistema de inteligencia artificial para analizar XAU/USD (oro). Usa dos modelos de machine learning que analizan 13 indicadores y solo dan senal cuando ambos coinciden.",
-        "Como leer la senal": "LONG = el modelo predice subida. SHORT = predice bajada. LATERAL = sin consenso, no operes. El porcentaje muestra la confianza del modelo.",
-        "Entrada, SL y TP": "Entrada: precio donde abres la operacion. SL (Stop Loss): donde cierras si el mercado va en tu contra. TP (Take Profit): donde tomas ganancias. MIMI-AI calcula SL = ATR x 1.5 y TP = ATR x 2.5.",
-        "Que es el ATR": "Mide la volatilidad promedio por vela. A mayor ATR, mayor movimiento y mayor distancia en SL y TP.",
-        "Que es el RSI": "Mide sobrecompra (>70, posible caida) o sobreventa (<30, posible rebote). Entre 30-70 es zona neutral.",
-        "Que es el MACD": "Mide el momentum. Positivo = momentum alcista. Negativo = bajista. MIMI-AI lo combina con RSI y EMAs.",
-        "Que son las EMAs": "Medias moviles de tendencia. Precio sobre EMA20 y EMA50 = tendencia alcista. Por debajo = bajista.",
+        "Que es MIMI-AI": "Sistema de IA para analizar XAU/USD. Usa dos modelos de ML con 13 indicadores y solo da senal cuando ambos coinciden.",
+        "Como leer la senal": "LONG = predice subida. SHORT = predice bajada. LATERAL = sin consenso, no operes. El porcentaje es la confianza del modelo.",
+        "Entrada, SL y TP": "Entrada: donde abres. SL: donde cierras si va en tu contra. TP: donde tomas ganancias. SL = ATR x 1.5, TP = ATR x 2.5.",
+        "Que es el ATR": "Mide volatilidad promedio por vela. Mayor ATR = mayor movimiento y mayor distancia en SL y TP.",
+        "Que es el RSI": "Mayor a 70 = sobrecompra (posible caida). Menor a 30 = sobreventa (posible rebote). Entre 30-70 = neutral.",
+        "Que es el MACD": "Mide momentum. Positivo = alcista. Negativo = bajista. Se combina con RSI y EMAs para decidir.",
+        "Que son las EMAs": "Medias moviles. Precio sobre EMA20 y EMA50 = tendencia alcista. Por debajo = bajista.",
         "Cuando operar": "Mejor ventana: 08:00-11:00 MX (Londres + NY). Mayor liquidez y movimiento real.",
         "Timeframes": "M5/M15 = scalping. H1/H4 = day trading. D1 = swing. Menor TF = mas senales pero mas ruido.",
-        "Variantes del mercado": "4 escenarios posibles con probabilidad: Alcista, Bajista, Lateral y Shock por noticias.",
-        "El oro (XAU/USD)": "Activo refugio. Sube con incertidumbre economica, inflacion, dolar debil. Baja cuando el dolar se fortalece.",
+        "Variantes del mercado": "4 escenarios: Alcista, Bajista, Lateral y Shock. El porcentaje es la probabilidad de cada uno.",
+        "El oro (XAU/USD)": "Activo refugio. Sube con incertidumbre, inflacion, dolar debil. Baja cuando el dolar se fortalece.",
         "Mercado bursatil": "Donde se compran y venden activos: acciones, divisas, materias primas, indices y criptos.",
-        "Noticias que mueven el oro": "NFP (1er viernes del mes), decision FED, CPI inflacion, discursos de la FED. Cierra posiciones antes de estos eventos.",
-        "R:R Riesgo-Beneficio": "MIMI-AI usa R:R 1:1.67. Por cada $1 arriesgado, el TP da $1.67 potencial. Rentable a largo plazo con 50% win rate.",
+        "Noticias importantes": "NFP, decision FED, CPI inflacion. Cierra posiciones antes de estos eventos — mueven el oro violentamente.",
+        "R:R Riesgo-Beneficio": "MIMI-AI usa R:R 1:1.67. Por cada $1 arriesgado, el TP da $1.67 potencial.",
     }
-
     for titulo, texto in guia_items.items():
         with st.expander(titulo):
             st.markdown(f"<small style='color:#aaa;line-height:1.7'>{texto}</small>", unsafe_allow_html=True)
 
-# ── CSS DINAMICO ──
 p = tema["primario"]
 fb = tema["fondo_banner"]
 bd = tema["borde"]
@@ -88,68 +60,55 @@ ac = tema["acento"]
 st.markdown(f"""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Inter:wght@300;400;500;600&display=swap');
-html, body, [class*="css"] {{ font-family: 'Inter', sans-serif; }}
+html,body,[class*="css"]{{font-family:'Inter',sans-serif}}
+.mimi-header{{text-align:center;padding:1.5rem 0 1rem 0}}
+.mimi-title{{
+    font-family:'Orbitron',monospace;font-size:clamp(1.8rem,5vw,3rem);font-weight:900;
+    background:linear-gradient(90deg,{p},{ac},{p});background-size:300%;
+    -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+    animation:shimmer 4s linear infinite;letter-spacing:4px;
+}}
+.mimi-sub{{font-family:'Orbitron',monospace;font-size:clamp(0.55rem,1.5vw,0.75rem);color:#666;letter-spacing:3px;margin-top:4px}}
+@keyframes shimmer{{0%{{background-position:0% 50%}}100%{{background-position:300% 50%}}}}
 
-.mimi-header {{ text-align:center; padding:1.5rem 0 1rem 0; }}
-.mimi-title {{
-    font-family:'Orbitron',monospace; font-size:clamp(1.8rem,5vw,3rem);
-    font-weight:900; background:linear-gradient(90deg,{p},{ac},{p});
-    background-size:300%; -webkit-background-clip:text; -webkit-text-fill-color:transparent;
-    animation:shimmer 4s linear infinite; letter-spacing:4px;
+.ticker-wrap{{
+    background:{fb};border:1px solid {bd};border-radius:8px;
+    padding:10px 0;overflow:hidden;margin-bottom:8px;position:relative;white-space:nowrap;
 }}
-.mimi-sub {{
-    font-family:'Orbitron',monospace; font-size:clamp(0.55rem,1.5vw,0.75rem);
-    color:#666; letter-spacing:3px; margin-top:4px;
+.ticker-label{{
+    position:absolute;left:0;top:0;bottom:0;display:flex;align-items:center;
+    padding:0 12px;background:{p};color:#000;font-family:'Orbitron',monospace;
+    font-size:9px;font-weight:700;letter-spacing:1px;z-index:2;
+    border-radius:8px 0 0 8px;min-width:70px;justify-content:center;
 }}
-@keyframes shimmer {{ 0%{{background-position:0% 50%}} 100%{{background-position:300% 50%}} }}
-
-.ticker-wrap {{
-    background:{fb}; border:1px solid {bd}; border-radius:8px;
-    padding:10px 0; overflow:hidden; margin-bottom:8px; position:relative;
-    white-space:nowrap;
+.ticker-inner{{
+    display:inline-block;padding-left:90px;
+    font-size:13px;font-weight:500;letter-spacing:0.5px;
 }}
-.ticker-label {{
-    position:absolute; left:0; top:0; bottom:0; display:flex; align-items:center;
-    padding:0 12px; background:{p}; color:#000;
-    font-family:'Orbitron',monospace; font-size:9px; font-weight:700;
-    letter-spacing:1px; z-index:2; border-radius:8px 0 0 8px; min-width:70px;
-    justify-content:center;
-}}
-.ticker-track {{
-    display:inline-flex; padding-left:80px; animation:ticker-loop 40s linear infinite;
-}}
-.ticker-track.fast {{ animation-duration:28s; }}
-.ticker-content {{ display:inline-block; white-space:nowrap; padding-right:80px; font-size:13px; }}
-@keyframes ticker-loop {{
-    0%   {{ transform:translateX(0); }}
-    100% {{ transform:translateX(-50%); }}
+.ticker-inner.senal{{animation:scroll 32s linear infinite}}
+.ticker-inner.tecnico{{animation:scroll 42s linear infinite}}
+@keyframes scroll{{
+    0%{{transform:translateX(100vw)}}
+    100%{{transform:translateX(-100%)}}
 }}
 
-.t-green{{color:#00e676}} .t-red{{color:#ff4444}} .t-yellow{{color:{p}}}
-.t-white{{color:#ffffff}} .t-gray{{color:#999}} .t-sep{{color:#333;margin:0 10px}}
+.t-green{{color:#00e676}}.t-red{{color:#ff4444}}.t-yellow{{color:{p}}}
+.t-white{{color:#ffffff}}.t-gray{{color:#999}}.t-sep{{color:#333;margin:0 10px}}
 
-.section-hdr {{
-    display:flex; align-items:center; gap:8px;
-    font-family:'Orbitron',monospace; font-size:clamp(0.65rem,1.5vw,0.8rem);
-    color:{p}; letter-spacing:2px; text-transform:uppercase;
-    margin-bottom:1rem; padding-bottom:6px; border-bottom:1px solid {bd};
+.section-hdr{{
+    font-family:'Orbitron',monospace;font-size:clamp(0.65rem,1.5vw,0.8rem);
+    color:{p};letter-spacing:2px;text-transform:uppercase;
+    margin-bottom:1rem;padding-bottom:6px;border-bottom:1px solid {bd};
 }}
-.help-btn {{
-    display:inline-flex; align-items:center; justify-content:center;
-    width:18px; height:18px; border-radius:50%; background:{bd};
-    color:{p}; font-size:10px; font-weight:700; cursor:pointer;
-    border:1px solid {p}; flex-shrink:0; line-height:1;
+.frase-estoica{{
+    background:{fb};border:1px solid {bd};border-left:3px solid {p};
+    border-radius:8px;padding:16px 20px;font-style:italic;
+    color:{p};font-size:clamp(12px,2vw,14px);text-align:center;
 }}
-.frase-estoica {{
-    background:{fb}; border:1px solid {bd}; border-left:3px solid {p};
-    border-radius:8px; padding:16px 20px; font-style:italic;
-    color:{p}; font-size:clamp(12px,2vw,14px); text-align:center;
-}}
-.footer {{ text-align:center;color:#333;font-size:10px;font-family:monospace;letter-spacing:2px;margin-top:1rem; }}
+.footer{{text-align:center;color:#333;font-size:10px;font-family:monospace;letter-spacing:2px;margin-top:1rem}}
 </style>
 """, unsafe_allow_html=True)
 
-# ── HEADER ──
 st.markdown(f"""
 <div class="mimi-header">
     <div class="mimi-title">MIMI-AI</div>
@@ -157,14 +116,13 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# ── TIMEFRAME ──
 TIMEFRAMES = {
-    "M5":  {"periodo":"5d",  "intervalo":"5m"},
-    "M15": {"periodo":"5d",  "intervalo":"15m"},
-    "M30": {"periodo":"1mo", "intervalo":"30m"},
-    "H1":  {"periodo":"1mo", "intervalo":"60m"},
-    "H4":  {"periodo":"3mo", "intervalo":"1d"},
-    "D1":  {"periodo":"2y",  "intervalo":"1d"},
+    "M5":{"periodo":"5d","intervalo":"5m"},
+    "M15":{"periodo":"5d","intervalo":"15m"},
+    "M30":{"periodo":"1mo","intervalo":"30m"},
+    "H1":{"periodo":"1mo","intervalo":"60m"},
+    "H4":{"periodo":"3mo","intervalo":"1d"},
+    "D1":{"periodo":"2y","intervalo":"1d"},
 }
 tf_sel = st.selectbox("Timeframe de analisis", list(TIMEFRAMES.keys()), index=5)
 tf = TIMEFRAMES[tf_sel]
@@ -172,13 +130,13 @@ tf = TIMEFRAMES[tf_sel]
 @st.cache_data(ttl=300)
 def cargar_y_entrenar(periodo, intervalo):
     df = yf.download("GC=F", period=periodo, interval=intervalo, progress=False)
-    df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
+    df.columns = [c[0] if isinstance(c,tuple) else c for c in df.columns]
     df.dropna(inplace=True)
-    if len(df) < 50: return None,None,None,None
-    df['EMA_20']    = ta.trend.ema_indicator(df['Close'], window=min(20,len(df)-1))
-    df['EMA_50']    = ta.trend.ema_indicator(df['Close'], window=min(50,len(df)-1))
-    df['EMA_200']   = ta.trend.ema_indicator(df['Close'], window=min(200,len(df)-1))
-    df['RSI']       = ta.momentum.rsi(df['Close'], window=min(14,len(df)-1))
+    if len(df)<50: return None,None,None,None
+    df['EMA_20']    = ta.trend.ema_indicator(df['Close'],window=min(20,len(df)-1))
+    df['EMA_50']    = ta.trend.ema_indicator(df['Close'],window=min(50,len(df)-1))
+    df['EMA_200']   = ta.trend.ema_indicator(df['Close'],window=min(200,len(df)-1))
+    df['RSI']       = ta.momentum.rsi(df['Close'],window=min(14,len(df)-1))
     df['MACD']      = ta.trend.macd(df['Close'])
     df['MACD_hist'] = ta.trend.macd_diff(df['Close'])
     df['BB_upper']  = ta.volatility.bollinger_hband(df['Close'])
@@ -194,7 +152,7 @@ def cargar_y_entrenar(periodo, intervalo):
     df['Return_3d'] = df['Close'].pct_change(3)
     df['Return_5d'] = df['Close'].pct_change(5)
     df['Future_Return'] = df['Close'].pct_change(5).shift(-5)
-    df['Target'] = 0
+    df['Target']=0
     df.loc[df['Future_Return']>0.003,'Target']=1
     df.loc[df['Future_Return']<-0.003,'Target']=-1
     df.dropna(inplace=True)
@@ -267,26 +225,22 @@ frases=[
     "Quien controla sus emociones, controla su capital.",
 ]
 
-def seccion(titulo, ayuda_key, ayuda_txt):
-    cols = st.columns([20,1])
-    with cols[0]:
+# ── HELPER: seccion con ? toggle ──
+if "ayudas" not in st.session_state:
+    st.session_state.ayudas = {}
+
+def seccion_con_ayuda(titulo, key, txt_ayuda):
+    col1, col2 = st.columns([20,1])
+    with col1:
         st.markdown(f'<div class="section-hdr">{titulo}</div>', unsafe_allow_html=True)
-    with cols[1]:
-        if st.button("?", key=ayuda_key, help=ayuda_txt):
-            st.info(ayuda_txt)
+    with col2:
+        if st.button("?", key=f"btn_{key}"):
+            st.session_state.ayudas[key] = not st.session_state.ayudas.get(key, False)
+    if st.session_state.ayudas.get(key, False):
+        st.info(txt_ayuda)
 
 def sep(): return '<span class="t-sep">|</span>'
 def lbl(t): return f'<span class="t-gray">{t}: </span>'
-
-def banner(contenido, speed_class=""):
-    doble = contenido + "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;" + contenido
-    return f'''
-<div class="ticker-wrap">
-  <span class="ticker-label">MIMI</span>
-  <div class="ticker-track {speed_class}">
-    <div class="ticker-content">{doble}</div>
-  </div>
-</div>'''
 
 senal_c="t-green" if pred==1 else "t-red" if pred==-1 else "t-yellow"
 rsi_c="t-red" if rsi>70 else "t-green" if rsi<30 else "t-white"
@@ -320,7 +274,7 @@ b2=(
 )
 
 # ── METRICAS ──
-seccion("Estado del mercado","h_estado","Muestra el precio actual del oro, RSI para detectar sobrecompra/sobreventa, ATR para la volatilidad y la senal principal de MIMI-AI con su nivel de confianza.")
+seccion_con_ayuda("Estado del mercado","estado","Muestra precio actual, RSI para sobrecompra/sobreventa, ATR para volatilidad y la senal principal de MIMI-AI con su confianza.")
 c1,c2,c3,c4=st.columns(4)
 c1.metric("Precio XAU/USD",f"${precio:,.2f}")
 c2.metric("RSI (14)",f"{rsi:.1f}","Sobrecomprado" if rsi>70 else "Sobrevendido" if rsi<30 else "Normal")
@@ -329,7 +283,7 @@ c4.metric("Senal MIMI-AI",etiquetas.get(pred),f"{max(prob)*100:.1f}% confianza")
 st.divider()
 
 # ── OPERACION ──
-seccion("Operacion sugerida","h_op","Muestra exactamente donde entrar, donde poner el Stop Loss para limitar perdidas y donde tomar ganancias (Take Profit). El R:R indica cuanto ganas por cada dolar que arriesgas.")
+seccion_con_ayuda("Operacion sugerida","op","Entrada: donde abrir. SL: donde cerrar si va en tu contra para limitar perdidas. TP: donde tomar ganancias. R:R 1:1.67 significa que ganas $1.67 por cada $1 arriesgado.")
 col1,col2,col3,col4=st.columns(4)
 col1.metric("Entrada",f"${entrada:,.2f}")
 if pred==1:
@@ -347,13 +301,21 @@ else:
 st.divider()
 
 # ── BANNERS ──
-seccion("Resumen del mercado","h_banner","Dos tickers continuos con toda la informacion del mercado en tiempo real. Verde = positivo, Rojo = negativo, Amarillo = neutral.")
-st.markdown(banner(b1,"fast"), unsafe_allow_html=True)
-st.markdown(banner(b2,""), unsafe_allow_html=True)
+seccion_con_ayuda("Resumen del mercado","banner","Tickers con informacion en tiempo real. Verde = positivo, Rojo = negativo, Amarillo = neutral.")
+st.markdown(f"""
+<div class="ticker-wrap">
+  <span class="ticker-label">SENAL</span>
+  <div class="ticker-inner senal">{b1}</div>
+</div>
+<div class="ticker-wrap">
+  <span class="ticker-label">TECNICO</span>
+  <div class="ticker-inner tecnico">{b2}</div>
+</div>
+""", unsafe_allow_html=True)
 st.divider()
 
 # ── VARIANTES ──
-seccion("Variantes del mercado","h_var","Los 4 escenarios posibles con su probabilidad. Alcista: precio rompe resistencia arriba. Bajista: rompe soporte abajo. Lateral: se queda en rango. Shock: evento inesperado como noticia macro.")
+seccion_con_ayuda("Variantes del mercado","var","4 escenarios posibles con probabilidad. Alcista: precio rompe resistencia. Bajista: rompe soporte. Lateral: se queda en rango. Shock: noticia inesperada.")
 v1,v2,v3,v4=st.columns(4)
 v1.metric("Alcista",f"{p_long}%",f"Rompe ${bb_up:,.0f}")
 v2.metric("Bajista",f"{p_short}%",f"Rompe ${bb_low:,.0f}")
@@ -362,19 +324,18 @@ v4.metric("Shock/Evento",f"{p_shock}%","Noticia macro")
 st.divider()
 
 # ── VENTANAS ──
-seccion("Ventanas de trading","h_vent","Las mejores horas para operar XAU/USD en hora Mexico. Londres + NY (08:00-11:00) es la ventana de maxima liquidez. Fuera de ventana hay mas riesgo de movimientos falsos.")
+seccion_con_ayuda("Ventanas de trading","vent","Mejores horas para operar XAU/USD en hora Mexico. Londres + NY (08:00-11:00) es la de maxima liquidez. Fuera de ventana hay mas riesgo de movimientos falsos.")
 for v in ventanas:
     activa=v["inicio"]<=hora<v["fin"]
     st.markdown(f"{'🟢 **ACTIVA**' if activa else '⚫'} **{v['inicio']:02d}:00 - {v['fin']:02d}:00** {v['nombre']} — [{v['calidad']}]")
 st.divider()
 
 # ── GRAFICAS ──
-seccion("Graficas","h_graf","Grafica historica del oro con EMA 20 y 50 para ver la tendencia. La grafica en vivo usa su propio timeframe independiente y se actualiza cada minuto.")
+seccion_con_ayuda("Graficas","graf","Grafica historica con EMA 20 y 50. La grafica en vivo usa su propio timeframe y se actualiza cada minuto con el precio real del mercado.")
 tab1,tab2=st.tabs(["Precio historico","Precio actual en vivo"])
 with tab1:
     cols_chart=[c for c in ['Close','EMA_20','EMA_50'] if c in df.columns]
     st.line_chart(df[cols_chart].tail(120))
-
 with tab2:
     tf_live_sel=st.selectbox("Timeframe en vivo",list(TIMEFRAMES.keys()),index=2,key="live_tf")
     tf_live=TIMEFRAMES[tf_live_sel]
@@ -401,7 +362,7 @@ with tab2:
 st.divider()
 
 # ── CHAT ──
-st.markdown(f'<div class="section-hdr">Chat con MIMI-AI</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-hdr">Chat con MIMI-AI</div>', unsafe_allow_html=True)
 if "mensajes" not in st.session_state:
     st.session_state.mensajes=[]
 
@@ -412,11 +373,11 @@ def responder(pregunta):
     elif any(x in p for x in ["como tradeas","como operas","metodologia","metodo","como decides","que estrategia"]):
         return f"Opero en {tf_sel} con confluencias de ML. RSI, MACD, ATR, Bollinger, EMAs y OBV. Dos modelos votan. Solo senal cuando coinciden. SL = ATR x 1.5 ({atr*1.5:.0f} pts), TP = ATR x 2.5 ({atr*2.5:.0f} pts), R:R 1:1.67. Solo en ventanas de alta liquidez."
     elif any(x in p for x in ["por que long","por que sube","razon long"]):
-        return f"LONG porque RSI {rsi:.1f} no sobrecomprado, MACD {'alcista' if macd>0 and macd_h>0 else 'mixto'}, precio {'sobre EMA20 y EMA50 — tendencia alcista' if precio>ema20 and precio>ema50 else 'en zona de decision'}. Confianza {max(prob)*100:.1f}%."
+        return f"LONG porque RSI {rsi:.1f} no sobrecomprado, MACD {'alcista' if macd>0 and macd_h>0 else 'mixto'}, precio {'sobre EMA20 y EMA50' if precio>ema20 and precio>ema50 else 'en zona de decision'}. Confianza {max(prob)*100:.1f}%."
     elif any(x in p for x in ["por que short","por que baja","razon short"]):
         return f"SHORT porque RSI {rsi:.1f}, MACD {'bajista' if macd<0 and macd_h<0 else 'mixto'}, precio {'bajo EMA20 y EMA50' if precio<ema20 and precio<ema50 else 'en zona de decision'}. Confianza {max(prob)*100:.1f}%."
     elif any(x in p for x in ["por que no","por que lateral","por que esperar"]):
-        return "Los modelos no coinciden. Sin consenso no hay operacion. Operar sin senal es apostar. El ruido es abundante. La senal, escasa."
+        return "Los modelos no coinciden. Sin consenso no hay operacion. El ruido es abundante. La senal, escasa."
     elif any(x in p for x in ["entrar","entro","operar","comprar","vender","abrir","deberia entrar"]):
         if pred==1:
             return f"LONG. Entrada ${entrada:,.2f} | SL ${sl_largo:,.2f} | TP ${tp_largo:,.2f}. Confianza {max(prob)*100:.1f}%. {'Ventana activa: '+ventana_activa['nombre'] if ventana_activa else 'Sin ventana optima ahora. Considera esperar 08:00 MX.'}."
@@ -425,7 +386,7 @@ def responder(pregunta):
         else:
             return "Sin consenso. No abras operacion. Espera ruptura clara del precio."
     elif any(x in p for x in ["sl","stop loss","stop","cuanto arriesgo"]):
-        if pred==1: return f"SL LONG: ${sl_largo:,.2f}. ATR ({atr:.2f}) x 1.5 = {atr*1.5:.0f} pts abajo de la entrada."
+        if pred==1: return f"SL LONG: ${sl_largo:,.2f}. ATR ({atr:.2f}) x 1.5 = {atr*1.5:.0f} pts abajo."
         elif pred==-1: return f"SL SHORT: ${sl_corto:,.2f}. ATR ({atr:.2f}) x 1.5 = {atr*1.5:.0f} pts arriba."
         else: return "Sin senal activa. El SL se calcula cuando hay consenso."
     elif any(x in p for x in ["tp","take profit","objetivo","donde tomo"]):
@@ -433,55 +394,53 @@ def responder(pregunta):
         elif pred==-1: return f"TP SHORT: ${tp_corto:,.2f}. {atr*2.5:.0f} pts abajo. R:R 1:1.67."
         else: return "Sin senal activa aun."
     elif any(x in p for x in ["rsi","sobrecomprado","sobrevendido"]):
-        if rsi>70: return f"RSI {rsi:.1f} — sobrecompra. Mercado subio demasiado rapido. Riesgo de correccion. Evita LONG ahora."
-        elif rsi<30: return f"RSI {rsi:.1f} — sobreventa. Mercado cayo demasiado. Posible rebote. Evita SHORT."
-        else: return f"RSI {rsi:.1f} — zona neutral (30-70). No da ventaja clara. Es un filtro, no una senal sola."
+        if rsi>70: return f"RSI {rsi:.1f} — sobrecompra. Riesgo de correccion. Evita LONG ahora."
+        elif rsi<30: return f"RSI {rsi:.1f} — sobreventa. Posible rebote. Evita SHORT."
+        else: return f"RSI {rsi:.1f} — zona neutral (30-70). No da ventaja clara por si solo."
     elif any(x in p for x in ["macd","momentum"]):
         estado="ALCISTA — toros al mando" if macd>0 and macd_h>0 else "BAJISTA — osos al mando" if macd<0 and macd_h<0 else "MIXTO — sin control claro"
-        return f"MACD {macd:.2f}, histograma {macd_h:.2f}. Momentum {estado}. Compara dos medias moviles para medir fuerza y direccion."
+        return f"MACD {macd:.2f}, histograma {macd_h:.2f}. Momentum {estado}."
     elif any(x in p for x in ["atr","volatilidad","cuanto se mueve"]):
         return f"ATR {atr:.2f}. El oro se mueve ~${atr:.2f} por vela en {tf_sel}. SL = {atr*1.5:.0f} pts, TP = {atr*2.5:.0f} pts."
     elif any(x in p for x in ["tendencia","trend","hacia donde","direccion"]):
-        if precio>ema20 and precio>ema50: return f"Tendencia ALCISTA. Precio ${precio:,.2f} sobre EMA20 ${ema20:,.2f} y EMA50 ${ema50:,.2f}. Compradores al mando."
-        elif precio<ema20 and precio<ema50: return f"Tendencia BAJISTA. Precio ${precio:,.2f} bajo EMA20 ${ema20:,.2f} y EMA50 ${ema50:,.2f}. Vendedores al mando."
-        else: return f"Tendencia MIXTA en {tf_sel}. Precio entre EMAs. Espera ruptura clara."
+        if precio>ema20 and precio>ema50: return f"Tendencia ALCISTA. Precio ${precio:,.2f} sobre EMA20 y EMA50. Compradores al mando."
+        elif precio<ema20 and precio<ema50: return f"Tendencia BAJISTA. Precio ${precio:,.2f} bajo EMA20 y EMA50. Vendedores al mando."
+        else: return f"Tendencia MIXTA. Precio entre EMAs. Espera ruptura clara."
     elif any(x in p for x in ["hora","ventana","cuando operar","horario","mejor hora"]):
-        if ventana_activa: return f"Ventana ACTIVA: {ventana_activa['nombre']} [{ventana_activa['calidad']}]. Buena hora. La mejor es Londres+NY 08:00-11:00 MX."
-        else: return f"Sin ventana activa ({ahora.strftime('%H:%M')} MX). Proxima optima: Londres+NY 08:00-11:00 MX. Fuera de ventana hay mas movimientos falsos."
+        if ventana_activa: return f"Ventana ACTIVA: {ventana_activa['nombre']} [{ventana_activa['calidad']}]. La mejor es Londres+NY 08:00-11:00 MX."
+        else: return f"Sin ventana activa ({ahora.strftime('%H:%M')} MX). Proxima optima: Londres+NY 08:00-11:00 MX."
     elif any(x in p for x in ["precio","oro","xau","cuanto vale","cotiza"]):
-        return f"Oro en ${precio:,.2f} en {tf_sel}. Resistencia ${bb_up:,.2f} (BB upper). Soporte ${bb_low:,.2f} (BB lower). ATR {atr:.2f}."
+        return f"Oro en ${precio:,.2f} en {tf_sel}. Resistencia ${bb_up:,.2f}, soporte ${bb_low:,.2f}. ATR {atr:.2f}."
     elif any(x in p for x in ["probabilidad","chances","que tan probable","escenarios"]):
         dom=max(p_long,p_short,p_lat,p_shock)
         dom_txt="ALCISTA" if dom==p_long else "BAJISTA" if dom==p_short else "LATERAL" if dom==p_lat else "SHOCK"
-        return f"Probabilidades en {tf_sel}: Alcista {p_long}%, Bajista {p_short}%, Lateral {p_lat}%, Shock {p_shock}%. Escenario dominante: {dom_txt}."
-    elif any(x in p for x in ["noticias","eventos","nfp","fed","inflacion","cpi","calendario"]):
-        return "Noticias que mueven el oro: NFP (1er viernes del mes, 07:30 MX), decision de tasas FED (cada 6 semanas), CPI inflacion (mensual). Antes de estos eventos el mercado se vuelve impredecible. MIMI-AI recomienda cerrar posiciones antes de noticias de alto impacto."
+        return f"Probabilidades en {tf_sel}: Alcista {p_long}%, Bajista {p_short}%, Lateral {p_lat}%, Shock {p_shock}%. Dominante: {dom_txt}."
+    elif any(x in p for x in ["noticias","eventos","nfp","fed","inflacion","cpi"]):
+        return "Noticias clave: NFP (1er viernes del mes 07:30 MX), decision FED (cada 6 semanas), CPI inflacion (mensual). Cierra posiciones antes de estos eventos — mueven el oro violentamente."
     elif any(x in p for x in ["rr","r:r","riesgo beneficio","risk reward"]):
-        return f"MIMI-AI usa R:R 1:1.67. Por cada $1 arriesgado, el TP da $1.67 potencial. SL actual: {atr*1.5:.0f} pts. TP actual: {atr*2.5:.0f} pts. Con 50% win rate este R:R es rentable a largo plazo."
-    elif any(x in p for x in ["que es el oro","por que sube el oro","por que baja el oro","oro refugio"]):
-        return "El oro es el activo refugio mas importante. SUBE con: incertidumbre economica, inflacion alta, dolar debil, guerras o crisis. BAJA con: dolar fuerte, tasas de interes altas, mercados de riesgo al alza. Opera 5 dias, cierra viernes, reabre domingo 18:00 MX."
-    elif any(x in p for x in ["mercado bursatil","bolsa","que es el mercado","como funciona el mercado"]):
-        return "El mercado bursatil es donde se compran y venden activos financieros: acciones, divisas, materias primas (oro, petroleo), indices (S&P500, Nasdaq) y criptos. MIMI-AI se especializa en XAU/USD. El precio lo determinan oferta y demanda global en tiempo real."
+        return f"R:R 1:1.67. Por cada $1 arriesgado, el TP da $1.67 potencial. SL: {atr*1.5:.0f} pts, TP: {atr*2.5:.0f} pts."
+    elif any(x in p for x in ["que es el oro","por que sube el oro","por que baja","oro refugio"]):
+        return "El oro es el activo refugio mas importante. SUBE con incertidumbre, inflacion, dolar debil. BAJA cuando el dolar se fortalece o tasas de interes suben. Opera 5 dias, cierra viernes, reabre domingo 18:00 MX."
+    elif any(x in p for x in ["mercado bursatil","bolsa","que es el mercado"]):
+        return "Mercado bursatil: donde se compran y venden activos financieros — acciones, divisas, materias primas, indices y criptos. MIMI-AI se especializa en XAU/USD."
     elif any(x in p for x in ["scalping"]):
-        return "Para scalping usa M5 o M15. Operaciones de 1-30 minutos. Mas senales pero mas ruido. Requiere concentracion y rapidez. Cambia el timeframe arriba."
+        return "Para scalping usa M5 o M15. Operaciones rapidas de 1-30 minutos. Cambia el timeframe arriba."
     elif any(x in p for x in ["day trading","intraday"]):
-        return "Para day trading usa H1 o H4. Operaciones de horas dentro del mismo dia. Estilo mas comun. Ideal en ventana Londres+NY 08:00-11:00 MX."
+        return "Para day trading usa H1 o H4. Operaciones de horas. Ideal en ventana Londres+NY 08:00-11:00 MX."
     elif any(x in p for x in ["swing"]):
-        return "Para swing trading usa D1. Operaciones de dias o semanas. Menos estres, menos tiempo frente a pantalla. SL y TP mas amplios."
-    elif any(x in p for x in ["timeframe","temporalidad","que tf","que marco"]):
-        return f"Timeframe actual: {tf_sel}. M5/M15 = scalping. M30/H1 = intradía. H4/D1 = swing. Menor TF = mas senales, mas ruido. Mayor TF = menos senales, mas confiables."
+        return "Para swing usa D1. Operaciones de dias o semanas. Menos estres, SL y TP mas amplios."
     elif any(x in p for x in ["ema","media movil","medias"]):
-        return f"EMA20: ${ema20:,.2f} | EMA50: ${ema50:,.2f}. Precio {'SOBRE ambas = tendencia alcista' if precio>ema20 and precio>ema50 else 'BAJO ambas = tendencia bajista' if precio<ema20 and precio<ema50 else 'ENTRE ellas = zona de decision'}."
+        return f"EMA20: ${ema20:,.2f} | EMA50: ${ema50:,.2f}. Precio {'SOBRE ambas = alcista' if precio>ema20 and precio>ema50 else 'BAJO ambas = bajista' if precio<ema20 and precio<ema50 else 'ENTRE ellas = zona de decision'}."
     elif any(x in p for x in ["bollinger","bb","bandas"]):
-        return f"Bandas Bollinger: Upper ${bb_up:,.2f} (resistencia), Lower ${bb_low:,.2f} (soporte). Precio cerca del upper = sobrecompra. Cerca del lower = sobreventa. Ancho de banda = volatilidad."
-    elif any(x in p for x in ["hola","buenas","buenos","hey","buen dia"]):
+        return f"BB Upper ${bb_up:,.2f} (resistencia), BB Lower ${bb_low:,.2f} (soporte). Precio cerca del upper = sobrecompra. Cerca del lower = sobreventa."
+    elif any(x in p for x in ["hola","buenas","buenos","hey"]):
         return "El mercado no saluda. Pero MIMI-AI si. Pregunta lo que necesitas."
     elif any(x in p for x in ["gracias","thank"]):
         return "Aqui estoy. Pregunta lo que necesites."
     elif any(x in p for x in ["ayuda","help","que puedes","que sabes"]):
-        return "Puedo hablar sobre: senal actual, entrada/SL/TP, RSI/MACD/ATR/EMAs/Bollinger, tendencia, timeframes, ventanas de horario, probabilidades, noticias, el oro, mercado bursatil, scalping/day trading/swing, R:R, y como funciona MIMI-AI."
+        return "Puedo hablar sobre: senal, SL/TP, RSI, MACD, ATR, EMAs, Bollinger, tendencia, timeframes, ventanas, probabilidades, noticias, el oro, mercado bursatil, scalping/day trading/swing, R:R y como funciona MIMI-AI."
     else:
-        return "No entendi bien. Puedo hablar sobre: senal, SL/TP, RSI, MACD, ATR, tendencia, timeframes, ventanas, probabilidades, noticias, el oro o el mercado. Reformula tu pregunta."
+        return "No entendi bien. Puedo hablar sobre: senal, SL/TP, indicadores, tendencia, timeframes, ventanas, probabilidades, noticias o el oro. Reformula tu pregunta."
 
 for msg in st.session_state.mensajes:
     with st.chat_message(msg["rol"]):
@@ -489,8 +448,7 @@ for msg in st.session_state.mensajes:
 
 if pregunta:=st.chat_input("Pregunta a MIMI-AI sobre el mercado..."):
     st.session_state.mensajes.append({"rol":"user","texto":pregunta})
-    respuesta=responder(pregunta)
-    st.session_state.mensajes.append({"rol":"assistant","texto":respuesta})
+    st.session_state.mensajes.append({"rol":"assistant","texto":responder(pregunta)})
     st.rerun()
 
 st.divider()
