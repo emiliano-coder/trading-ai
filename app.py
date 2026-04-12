@@ -239,8 +239,55 @@ with st.spinner("⚔️ MIMI-AI iniciando..."):
     sd = get_signal()
 
 if sd is None:
-    st.warning("⚠️ Mercado cerrado o sin datos. Mostrando últimos datos disponibles.")
-    st.stop()
+    st.warning("⚠️ Mercado cerrado — mostrando últimos datos disponibles. Reabre el domingo 6 PM MX.")
+    # Usar datos históricos D1 como fallback
+    import yfinance as _yf
+    _df = _yf.download("GC=F", period="2y", interval="1d", progress=False)
+    _df.columns = [c[0] if isinstance(c, tuple) else c for c in _df.columns]
+    _df.dropna(inplace=True)
+    _df['EMA_20']    = ta.trend.ema_indicator(_df['Close'], window=20)
+    _df['EMA_50']    = ta.trend.ema_indicator(_df['Close'], window=50)
+    _df['EMA_200']   = ta.trend.ema_indicator(_df['Close'], window=200)
+    _df['RSI']       = ta.momentum.rsi(_df['Close'], window=14)
+    _df['MACD']      = ta.trend.macd(_df['Close'])
+    _df['MACD_hist'] = ta.trend.macd_diff(_df['Close'])
+    _df['BB_upper']  = ta.volatility.bollinger_hband(_df['Close'])
+    _df['BB_lower']  = ta.volatility.bollinger_lband(_df['Close'])
+    _df['BB_width']  = (_df['BB_upper'] - _df['BB_lower']) / _df['Close']
+    _df['ATR']       = ta.volatility.average_true_range(_df['High'], _df['Low'], _df['Close'])
+    _df['Stoch_K']   = ta.momentum.stoch(_df['High'], _df['Low'], _df['Close'])
+    _df['OBV']       = ta.volume.on_balance_volume(_df['Close'], _df['Volume'])
+    _df['Dist_EMA20']  = (_df['Close'] - _df['EMA_20'])  / _df['Close'] * 100
+    _df['Dist_EMA50']  = (_df['Close'] - _df['EMA_50'])  / _df['Close'] * 100
+    _df['Dist_EMA200'] = (_df['Close'] - _df['EMA_200']) / _df['Close'] * 100
+    _df['Return_1d'] = _df['Close'].pct_change(1)
+    _df['Return_3d'] = _df['Close'].pct_change(3)
+    _df['Return_5d'] = _df['Close'].pct_change(5)
+    _df['Future_Return'] = _df['Close'].pct_change(5).shift(-5)
+    _df['Target'] = 0
+    _df.loc[_df['Future_Return'] >  0.003,'Target'] =  1
+    _df.loc[_df['Future_Return'] < -0.003,'Target'] = -1
+    _df.dropna(inplace=True)
+    _features = ['RSI','MACD','MACD_hist','BB_width','ATR','Stoch_K',
+                 'Dist_EMA20','Dist_EMA50','Dist_EMA200','Return_1d','Return_3d','Return_5d','OBV']
+    _features = [f for f in _features if f in _df.columns]
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.ensemble import RandomForestClassifier
+    from sklearn.model_selection import train_test_split
+    _sc = StandardScaler()
+    _Xs = _sc.fit_transform(_df[_features])
+    _Xtr,_Xte,_ytr,_yte = train_test_split(_Xs,_df['Target'],test_size=.2,random_state=42,shuffle=False)
+    _m = RandomForestClassifier(n_estimators=100,max_depth=10,random_state=42,n_jobs=-1)
+    _m.fit(_Xtr,_ytr)
+    _ul   = _df[_features].iloc[-1:]
+    _pred = _m.predict(_sc.transform(_ul))[0]
+    _prob = _m.predict_proba(_sc.transform(_ul))[0]
+    sd = dict(df=_df, pred=int(_pred), prob=_prob.tolist(),
+              precio=float(_df['Close'].iloc[-1]), rsi=float(_df['RSI'].iloc[-1]),
+              atr=float(_df['ATR'].iloc[-1]), bb_up=float(_df['BB_upper'].iloc[-1]),
+              bb_low=float(_df['BB_lower'].iloc[-1]), macd=float(_df['MACD'].iloc[-1]),
+              macd_h=float(_df['MACD_hist'].iloc[-1]), ema20=float(_df['EMA_20'].iloc[-1]),
+              ema50=float(_df['EMA_50'].iloc[-1]), features=_features)
 
 pred,prob,precio,rsi,atr = sd['pred'],sd['prob'],sd['precio'],sd['rsi'],sd['atr']
 bb_up,bb_low,ema20,ema50,df = sd['bb_up'],sd['bb_low'],sd['ema20'],sd['ema50'],sd['df']
