@@ -606,15 +606,15 @@ with tab5:
             fig.add_trace(go.Scatter(x=dp.index,y=dp['Close'],line=dict(color=T['primary'],width=2),name="Precio"),row=1,col=1)
         fig.add_trace(go.Scatter(x=dp.index,y=dp['EMA_20'],line=dict(color='#FFB800',width=1),name="EMA20"),row=1,col=1)
         fig.add_trace(go.Scatter(x=dp.index,y=dp['EMA_50'],line=dict(color='#00FFFF',width=1,dash='dot'),name="EMA50"),row=1,col=1)
-        fig.add_trace(go.Scatter(x=dp.index,y=dp['BB_upper'],line=dict(color='#ffffff22',width=1),showlegend=False),row=1,col=1)
-        fig.add_trace(go.Scatter(x=dp.index,y=dp['BB_lower'],line=dict(color='#ffffff22',width=1),fill='tonexty',fillcolor='rgba(255,255,255,0.03)',name="BB"),row=1,col=1)
+        fig.add_trace(go.Scatter(x=dp.index,y=dp['BB_upper'],line=dict(color='rgba(255,255,255,0.13)',width=1),showlegend=False),row=1,col=1)
+        fig.add_trace(go.Scatter(x=dp.index,y=dp['BB_lower'],line=dict(color='rgba(255,255,255,0.13)',width=1),fill='tonexty',fillcolor='rgba(255,255,255,0.03)',name="BB"),row=1,col=1)
         fig.add_trace(go.Scatter(x=dp.index,y=dp['RSI'],line=dict(color=T['primary'],width=1.5),name="RSI"),row=2,col=1)
         fig.add_hline(y=70,line_color='#FF4444',line_dash='dot',row=2,col=1)
         fig.add_hline(y=30,line_color='#00FF88',line_dash='dot',row=2,col=1)
         fig.update_layout(paper_bgcolor='#000',plot_bgcolor='#0a0a0a',font=dict(color='#aaa'),
             xaxis_rangeslider_visible=False,height=500,margin=dict(l=0,r=0,t=20,b=0),
             legend=dict(bgcolor='#000',bordercolor='#333',orientation='h'))
-        fig.update_xaxes(gridcolor='#1a1a1a'); fig.update_yaxes(gridcolor='#1a1a1a')
+        fig.update_xaxes(gridcolor='rgba(30,30,30,0.8)'); fig.update_yaxes(gridcolor='rgba(30,30,30,0.8)')
         st.plotly_chart(fig, use_container_width=True)
 
     st.markdown("**📡 En Vivo:**")
@@ -629,7 +629,7 @@ with tab5:
             fig2.add_trace(go.Scatter(x=dlp.index,y=dlp['Close'],line=dict(color=T['primary'],width=2)))
         fig2.update_layout(paper_bgcolor='#000',plot_bgcolor='#0a0a0a',font=dict(color='#aaa'),
             xaxis_rangeslider_visible=False,height=300,margin=dict(l=0,r=0,t=10,b=0))
-        fig2.update_xaxes(gridcolor='#1a1a1a'); fig2.update_yaxes(gridcolor='#1a1a1a')
+        fig2.update_xaxes(gridcolor='rgba(30,30,30,0.8)'); fig2.update_yaxes(gridcolor='rgba(30,30,30,0.8)')
         st.plotly_chart(fig2, use_container_width=True)
         u = dfl.iloc[-1]
         lv1,lv2,lv3 = st.columns(3)
@@ -731,8 +731,8 @@ with tab7:
         fig_eq.update_layout(paper_bgcolor='#000', plot_bgcolor='#0a0a0a',
             font=dict(color='#aaa'), height=300, margin=dict(l=0,r=0,t=20,b=0),
             title=dict(text="Curva de Capital", font=dict(color='#FFD700')))
-        fig_eq.update_xaxes(gridcolor='#1a1a1a')
-        fig_eq.update_yaxes(gridcolor='#1a1a1a')
+        fig_eq.update_xaxes(gridcolor='rgba(30,30,30,0.8)')
+        fig_eq.update_yaxes(gridcolor='rgba(30,30,30,0.8)')
         st.plotly_chart(fig_eq, use_container_width=True)
     if bt_trades:
         df_bt = pd.DataFrame(bt_trades[-30:])
