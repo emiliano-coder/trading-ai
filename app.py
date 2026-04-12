@@ -29,14 +29,22 @@ THEMES = {
     "Menta":      {"primary":"#98FF98","secondary":"#66CC66","bg":"#001a00","card":"#002a00"},
 }
 
+# ── CARGAR SECRETS ───────────────────────────────────────────────
+try:
+    _tg_token   = st.secrets["TG_TOKEN"]
+    _tg_chat_id = st.secrets["TG_CHAT_ID"]
+except: 
+    _tg_token   = ''
+    _tg_chat_id = ''
+
 if 'paper_trades'   not in st.session_state: st.session_state.paper_trades   = []
 if 'chat_history'   not in st.session_state: st.session_state.chat_history   = []
 if 'account_size'   not in st.session_state: st.session_state.account_size   = 1000.0
 if 'signal_history' not in st.session_state: st.session_state.signal_history  = []
 if 'monitor_active' not in st.session_state: st.session_state.monitor_active  = False
 if 'monitor_data'   not in st.session_state: st.session_state.monitor_data    = {}
-if 'tg_token'       not in st.session_state: st.session_state.tg_token        = ''
-if 'tg_chat_id'     not in st.session_state: st.session_state.tg_chat_id      = ''
+if 'tg_token'       not in st.session_state: st.session_state.tg_token        = _tg_token
+if 'tg_chat_id'     not in st.session_state: st.session_state.tg_chat_id      = _tg_chat_id
 
 # ── SIDEBAR ──────────────────────────────────────────────────────
 with st.sidebar:
