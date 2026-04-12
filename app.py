@@ -12,6 +12,7 @@ from datetime import datetime
 import random
 import warnings
 import requests
+import io
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 warnings.filterwarnings('ignore')
@@ -107,7 +108,7 @@ def get_data(interval="1d", period="2y"):
 
 @st.cache_data(ttl=300)
 def add_indicators(df_json):
-    df = pd.read_json(df_json, orient='split')
+    df = pd.read_json(io.StringIO(df_json), orient='split')
     df['EMA_20']    = ta.trend.ema_indicator(df['Close'], window=20)
     df['EMA_50']    = ta.trend.ema_indicator(df['Close'], window=50)
     df['EMA_200']   = ta.trend.ema_indicator(df['Close'], window=200)
@@ -361,7 +362,7 @@ def send_telegram(token, chat_id, mensaje):
 # ── BACKTEST ──────────────────────────────────────────────────────
 @st.cache_data(ttl=3600)
 def run_backtest(df_json):
-    df = pd.read_json(df_json, orient='split')
+    df = pd.read_json(io.StringIO(df_json), orient='split')
     capital = 1000.0
     equity  = [capital]
     trades  = []
