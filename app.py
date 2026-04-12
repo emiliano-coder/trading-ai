@@ -94,7 +94,11 @@ def get_data(interval="1d", period="2y"):
     df = yf.download("GC=F", period=period, interval=interval, progress=False)
     df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
     df.dropna(inplace=True)
-    return df if len(df) >= 50 else None
+    if len(df) >= 50: return df
+    df2 = yf.download("GC=F", period="2y", interval="1d", progress=False)
+    df2.columns = [c[0] if isinstance(c, tuple) else c for c in df2.columns]
+    df2.dropna(inplace=True)
+    return df2 if len(df2) >= 50 else None
 
 @st.cache_data(ttl=300)
 def add_indicators(df_json):
@@ -230,7 +234,8 @@ with st.spinner("⚔️ MIMI-AI iniciando..."):
     sd = get_signal()
 
 if sd is None:
-    st.error("Sin datos. Intenta más tarde."); st.stop()
+    st.warning("⚠️ Mercado cerrado o sin datos. Mostrando últimos datos disponibles.")
+    st.stop()
 
 pred,prob,precio,rsi,atr = sd['pred'],sd['prob'],sd['precio'],sd['rsi'],sd['atr']
 bb_up,bb_low,ema20,ema50,df = sd['bb_up'],sd['bb_low'],sd['ema20'],sd['ema50'],sd['df']
