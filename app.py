@@ -31,6 +31,11 @@ THEMES = {
 if 'paper_trades'   not in st.session_state: st.session_state.paper_trades   = []
 if 'chat_history'   not in st.session_state: st.session_state.chat_history   = []
 if 'account_size'   not in st.session_state: st.session_state.account_size   = 1000.0
+if 'signal_history' not in st.session_state: st.session_state.signal_history  = []
+if 'monitor_active' not in st.session_state: st.session_state.monitor_active  = False
+if 'monitor_data'   not in st.session_state: st.session_state.monitor_data    = {}
+if 'tg_token'       not in st.session_state: st.session_state.tg_token        = ''
+if 'tg_chat_id'     not in st.session_state: st.session_state.tg_chat_id      = ''
 
 # ── SIDEBAR ──────────────────────────────────────────────────────
 with st.sidebar:
@@ -279,7 +284,91 @@ c5.metric("📐 R:R",      f"1:{rr}")
 
 st.markdown("---")
 
-tab1,tab2,tab3,tab4,tab5,tab6 = st.tabs(["🎯 Señal","🏦 SMC/ICT","🌐 Multi-TF","📋 Paper Trading","📊 Gráfica","💬 Chat"])
+# ── GUARDAR SEÑAL EN HISTORIAL ────────────────────────────────────
+def save_signal(pred, prob, precio, rsi, atr):
+    mx = pytz.timezone('America/Mexico_City')
+    entry = {
+        'fecha': datetime.now(mx).strftime('%d/%m/%Y %H:%M'),
+        'direccion': ET.get(pred),
+        'confianza': f"{max(prob)*100:.1f}%",
+        'precio': precio,
+        'rsi': round(rsi,1),
+        'atr': round(atr,2),
+        'sl': round(precio-atr*1.5,2) if pred>=0 else round(precio+atr*1.5,2),
+        'tp': round(precio+atr*2.5,2) if pred>=0 else round(precio-atr*2.5,2),
+        'resultado': 'PENDIENTE'
+    }
+    if not st.session_state.signal_history or st.session_state.signal_history[-1]['precio'] != precio:
+        st.session_state.signal_history.append(entry)
+
+save_signal(pred, prob, precio, rsi, atr)
+
+# ── TELEGRAM ─────────────────────────────────────────────────────
+def send_telegram(token, chat_id, mensaje):
+    try:
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        requests.post(url, data={'chat_id': chat_id, 'text': mensaje, 'parse_mode':'Markdown'}, timeout=5)
+        return True
+    except: return False
+
+# ── BACKTEST ──────────────────────────────────────────────────────
+@st.cache_data(ttl=3600)
+def run_backtest(df_json):
+    df = pd.read_json(df_json, orient='split')
+    capital = 1000.0
+    equity  = [capital]
+    trades  = []
+    atr_col = ta.volatility.average_true_range(df['High'], df['Low'], df['Close'])
+    rsi_col = ta.momentum.rsi(df['Close'], window=14)
+    macd_col= ta.trend.macd_diff(df['Close'])
+    e20     = ta.trend.ema_indicator(df['Close'], window=20)
+    e50     = ta.trend.ema_indicator(df['Close'], window=50)
+    i = 50
+    while i < len(df)-5:
+        p   = float(df['Close'].iloc[i])
+        atr = float(atr_col.iloc[i]) if not pd.isna(atr_col.iloc[i]) else 50
+        rsi = float(rsi_col.iloc[i]) if not pd.isna(rsi_col.iloc[i]) else 50
+        mh  = float(macd_col.iloc[i]) if not pd.isna(macd_col.iloc[i]) else 0
+        em20= float(e20.iloc[i]) if not pd.isna(e20.iloc[i]) else p
+        em50= float(e50.iloc[i]) if not pd.isna(e50.iloc[i]) else p
+        sl_l= p - atr*1.5
+        tp_l= p + atr*2.5
+        sl_s= p + atr*1.5
+        tp_s= p - atr*2.5
+        direccion = 0
+        if p>em20 and p>em50 and rsi<70 and mh>0: direccion=1
+        elif p<em20 and p<em50 and rsi>30 and mh<0: direccion=-1
+        if direccion != 0:
+            for j in range(1,6):
+                fp = float(df['Close'].iloc[i+j])
+                if direccion==1:
+                    if fp>=tp_l:
+                        pnl=(tp_l-p)/p*capital*0.1; capital+=pnl
+                        trades.append({'fecha':str(df.index[i])[:10],'dir':'LONG','entrada':p,'salida':tp_l,'pnl':round(pnl,2),'resultado':'WIN'})
+                        break
+                    elif fp<=sl_l:
+                        pnl=(sl_l-p)/p*capital*0.1; capital+=pnl
+                        trades.append({'fecha':str(df.index[i])[:10],'dir':'LONG','entrada':p,'salida':sl_l,'pnl':round(pnl,2),'resultado':'LOSS'})
+                        break
+                else:
+                    if fp<=tp_s:
+                        pnl=(p-tp_s)/p*capital*0.1; capital+=pnl
+                        trades.append({'fecha':str(df.index[i])[:10],'dir':'SHORT','entrada':p,'salida':tp_s,'pnl':round(pnl,2),'resultado':'WIN'})
+                        break
+                    elif fp>=sl_s:
+                        pnl=(p-sl_s)/p*capital*0.1; capital+=pnl
+                        trades.append({'fecha':str(df.index[i])[:10],'dir':'SHORT','entrada':p,'salida':sl_s,'pnl':round(pnl,2),'resultado':'LOSS'})
+                        break
+            equity.append(capital)
+            i += 5
+        else:
+            i += 1
+    wins   = sum(1 for t in trades if t['resultado']=='WIN')
+    losses = len(trades)-wins
+    wr     = wins/len(trades)*100 if trades else 0
+    return trades, equity, round(wr,1), round(capital-1000,2)
+
+tab1,tab2,tab3,tab4,tab5,tab6,tab7,tab8,tab9,tab10 = st.tabs(["🎯 Señal","🏦 SMC/ICT","🌐 Multi-TF","📋 Paper Trading","📊 Gráfica","💬 Chat","📈 Backtest","🔔 Alertas","📜 Historial","👁️ Monitor"])
 
 # ─ TAB 1: SEÑAL ──────────────────────────────────────────────────
 with tab1:
@@ -576,3 +665,180 @@ frases = ["El mercado revela lo que eres. No lo que quieres.",
           "El trader que no acepta la incertidumbre, ya perdió.",
           "Opera el plan. No las emociones."]
 st.markdown(f'<div class="stoic">🪨 {random.choice(frases)}</div>', unsafe_allow_html=True)
+
+# ─ TAB 7: BACKTEST ───────────────────────────────────────────────
+with tab7:
+    st.subheader("📈 Backtest Visual")
+    with st.spinner("Corriendo backtest..."):
+        bt_trades, bt_equity, bt_wr, bt_pnl = run_backtest(df.to_json(orient='split'))
+    bm1,bm2,bm3,bm4 = st.columns(4)
+    bm1.metric("Capital Inicial", "$1,000")
+    bm2.metric("Capital Final",   f"${1000+bt_pnl:,.2f}", f"{bt_pnl:+.2f}")
+    bm3.metric("Win Rate",        f"{bt_wr:.1f}%")
+    bm4.metric("Total Trades",    str(len(bt_trades)))
+    if bt_equity:
+        fig_eq = go.Figure()
+        fig_eq.add_trace(go.Scatter(y=bt_equity, fill='tozeroy',
+            fillcolor='rgba(0,255,136,0.1)', line=dict(color='#00FF88',width=2), name="Capital"))
+        fig_eq.update_layout(paper_bgcolor='#000', plot_bgcolor='#0a0a0a',
+            font=dict(color='#aaa'), height=300, margin=dict(l=0,r=0,t=20,b=0),
+            title=dict(text="Curva de Capital", font=dict(color='#FFD700')))
+        fig_eq.update_xaxes(gridcolor='#1a1a1a')
+        fig_eq.update_yaxes(gridcolor='#1a1a1a')
+        st.plotly_chart(fig_eq, use_container_width=True)
+    if bt_trades:
+        df_bt = pd.DataFrame(bt_trades[-30:])
+        st.markdown("**Últimos 30 trades:**")
+        st.dataframe(df_bt, use_container_width=True)
+
+# ─ TAB 8: ALERTAS TELEGRAM ───────────────────────────────────────
+with tab8:
+    st.subheader("🔔 Alertas por Telegram")
+    st.markdown("""
+**Cómo configurar Telegram:**
+1. Abre Telegram y busca **@BotFather**
+2. Escribe `/newbot` y sigue los pasos
+3. Copia el **token** que te da
+4. Busca **@userinfobot** en Telegram y escríbele — te da tu **Chat ID**
+5. Pega ambos aquí abajo
+""")
+    tg_token   = st.text_input("🤖 Token del Bot", value=st.session_state.tg_token, type="password")
+    tg_chat_id = st.text_input("💬 Chat ID",        value=st.session_state.tg_chat_id)
+    if tg_token: st.session_state.tg_token   = tg_token
+    if tg_chat_id: st.session_state.tg_chat_id = tg_chat_id
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        st.markdown("**Condiciones para alertar:**")
+        alert_long   = st.checkbox("📈 Señal LONG",   value=True)
+        alert_short  = st.checkbox("📉 Señal SHORT",  value=True)
+        alert_conf   = st.slider("Confianza mínima (%)", 30, 90, 50)
+        alert_window = st.checkbox("⭐ Solo en ventana activa", value=True)
+    with col_b:
+        if st.button("🧪 Enviar mensaje de prueba"):
+            if tg_token and tg_chat_id:
+                msg = f"⚔️ *MIMI-AI Test*\nConexión exitosa ✅\nPrecio XAU/USD: ${precio:,.2f}"
+                ok = send_telegram(tg_token, tg_chat_id, msg)
+                st.success("✅ Mensaje enviado") if ok else st.error("❌ Error — revisa token y chat ID")
+            else:
+                st.warning("Falta token o chat ID")
+
+        if st.button("📡 Enviar señal actual"):
+            if tg_token and tg_chat_id:
+                mx2  = pytz.timezone('America/Mexico_City')
+                hora2= datetime.now(mx2).strftime('%H:%M')
+                msg2 = f"""⚔️ *MIMI-AI — Señal*
+🕐 {hora2} MX
+💰 Precio: *${precio:,.2f}*
+🎯 Señal: *{ET.get(pred)}*
+📊 Confianza: *{max(prob)*100:.1f}%*
+📈 RSI: {rsi:.1f}
+🔴 SL: ${sl_long:,.2f}
+🟢 TP: ${tp_long:,.2f}
+📐 R:R: 1:{rr}
+🧠 SMC Bias: {smc['bias']}"""
+                ok2 = send_telegram(tg_token, tg_chat_id, msg2)
+                st.success("✅ Señal enviada a Telegram") if ok2 else st.error("❌ Error al enviar")
+            else:
+                st.warning("Configura token y chat ID primero")
+
+    # Auto-alert logic
+    if tg_token and tg_chat_id:
+        conf_ok   = max(prob)*100 >= alert_conf
+        dir_ok    = (pred==1 and alert_long) or (pred==-1 and alert_short)
+        mx3       = pytz.timezone('America/Mexico_City')
+        h3        = datetime.now(mx3).hour
+        vens2     = [(3,5),(8,11),(12,14),(15,17)]
+        en_ventana= any(i<=h3<f for i,f in vens2)
+        win_ok    = (not alert_window) or en_ventana
+        if conf_ok and dir_ok and win_ok:
+            st.success(f"✅ Condiciones cumplidas — señal lista para alertar ({max(prob)*100:.1f}% confianza)")
+        else:
+            reasons = []
+            if not conf_ok:   reasons.append(f"confianza {max(prob)*100:.1f}% < {alert_conf}%")
+            if not dir_ok:    reasons.append("dirección no seleccionada")
+            if not win_ok:    reasons.append("fuera de ventana activa")
+            st.info(f"Sin alerta: {', '.join(reasons)}")
+
+# ─ TAB 9: HISTORIAL DE SEÑALES ───────────────────────────────────
+with tab9:
+    st.subheader("📜 Historial de Señales")
+    if st.session_state.signal_history:
+        df_sh = pd.DataFrame(st.session_state.signal_history)
+        st.markdown(f"**{len(df_sh)} señales registradas esta sesión**")
+        # Colorear resultados
+        st.dataframe(df_sh, use_container_width=True)
+        # Permitir marcar resultado
+        st.markdown("**Actualizar resultado de señal:**")
+        sig_idx = st.number_input("# Señal (desde 1)", min_value=1,
+                                   max_value=len(st.session_state.signal_history), value=1, step=1)
+        sig_res = st.selectbox("Resultado", ["PENDIENTE","WIN ✅","LOSS ❌","BREAKEVEN ➡️"])
+        if st.button("Actualizar"):
+            st.session_state.signal_history[sig_idx-1]['resultado'] = sig_res
+            st.success("Actualizado ✅"); st.rerun()
+        wins_h  = sum(1 for s in st.session_state.signal_history if 'WIN' in s['resultado'])
+        losses_h= sum(1 for s in st.session_state.signal_history if 'LOSS' in s['resultado'])
+        if wins_h+losses_h > 0:
+            wr_h = wins_h/(wins_h+losses_h)*100
+            st.metric("Win Rate Real (sesión)", f"{wr_h:.1f}%", f"{wins_h}W / {losses_h}L")
+        if st.button("🗑️ Limpiar historial"):
+            st.session_state.signal_history = []; st.rerun()
+    else:
+        st.info("Sin señales registradas aún. Se guardan automáticamente al cargar la app.")
+
+# ─ TAB 10: MONITOR DE POSICIÓN ───────────────────────────────────
+with tab10:
+    st.subheader("👁️ Monitor de Posición")
+    mx4   = pytz.timezone('America/Mexico_City')
+    ahora = datetime.now(mx4)
+    h4    = ahora.hour
+    mercado_abierto = not (h4 >= 17 and ahora.weekday() == 4) and not (ahora.weekday() in [5,6] and h4 < 18)
+
+    if not mercado_abierto:
+        st.warning("⚠️ Mercado cerrado. El monitor funciona cuando el mercado esté abierto (Dom 6PM – Vie 4PM MX).")
+
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.markdown("**Configurar posición:**")
+    mon1, mon2 = st.columns(2)
+    with mon1:
+        mon_dir     = st.selectbox("Dirección", ["LONG 📈","SHORT 📉"], key="mon_dir")
+        mon_entrada = st.number_input("Precio de entrada", value=float(precio), step=0.5, key="mon_ent")
+        mon_sl      = st.number_input("Stop Loss", value=round(sl_long if "LONG" in mon_dir else sl_short,2), step=0.5, key="mon_sl")
+        mon_tp      = st.number_input("Take Profit", value=round(tp_long if "LONG" in mon_dir else tp_short,2), step=0.5, key="mon_tp")
+    with mon2:
+        mon_estilo  = st.selectbox("Estilo", ["Scalping (2 min)","Day Trading (5 min)","Swing (10 min)","Personalizado"])
+        intervalos  = {"Scalping (2 min)":2,"Day Trading (5 min)":5,"Swing (10 min)":10}
+        mon_interval= intervalos.get(mon_estilo, st.number_input("Minutos", 1, 60, 5) if mon_estilo=="Personalizado" else 5)
+        mon_checks  = st.slider("Número de revisiones", 3, 20, 6)
+        mon_lotes, mon_riesgo = calc_posicion(account_size, risk_pct, mon_entrada, mon_sl)
+        st.markdown(f"**Lotes:** {mon_lotes} | **Riesgo:** ${mon_riesgo:.2f}")
+        dist_sl = abs(mon_entrada - mon_sl)
+        dist_tp = abs(mon_tp - mon_entrada)
+        mon_rr  = round(dist_tp/dist_sl,2) if dist_sl>0 else 0
+        st.markdown(f"**R:R:** 1:{mon_rr}")
+
+    pnl_actual = (precio - mon_entrada) * (1 if "LONG" in mon_dir else -1)
+    pnl_pct    = pnl_actual/mon_entrada*100
+    estado_mon = "🟢 MANTÉN" if pnl_actual>0 else "🔴 PRECAUCIÓN"
+    if ("LONG" in mon_dir and precio <= mon_sl) or ("SHORT" in mon_dir and precio >= mon_sl):
+        estado_mon = "🚨 SL ALCANZADO — SAL YA"
+    elif ("LONG" in mon_dir and precio >= mon_tp) or ("SHORT" in mon_dir and precio <= mon_tp):
+        estado_mon = "🎯 TP ALCANZADO — TOMA GANANCIA"
+    st.markdown(f"**Estado actual:** {estado_mon}")
+    st.markdown(f"**Precio actual:** ${precio:,.2f} | **P&L estimado:** {pnl_pct:+.3f}%")
+
+    fig_mon = go.Figure()
+    fig_mon.add_hline(y=mon_tp,      line_color='#00FF88', line_dash='dash', annotation_text=f"TP ${mon_tp:,.0f}")
+    fig_mon.add_hline(y=mon_entrada, line_color='#FFD700', line_width=2,     annotation_text=f"ENTRADA ${mon_entrada:,.0f}")
+    fig_mon.add_hline(y=mon_sl,      line_color='#FF4444', line_dash='dash', annotation_text=f"SL ${mon_sl:,.0f}")
+    fig_mon.add_hline(y=precio,      line_color='#FFFFFF', line_dash='dot',  annotation_text=f"ACTUAL ${precio:,.2f}")
+    fig_mon.update_layout(paper_bgcolor='#000', plot_bgcolor='#0a0a0a',
+        font=dict(color='#aaa'), height=250, margin=dict(l=0,r=0,t=30,b=0),
+        title=dict(text="Visualización de Posición", font=dict(color='#FFD700')))
+    st.plotly_chart(fig_mon, use_container_width=True)
+
+    if mercado_abierto:
+        if st.button("🔄 Actualizar precio ahora"):
+            st.cache_data.clear(); st.rerun()
+        st.info(f"💡 La página se actualiza manualmente. Para monitoreo automático cada {mon_interval} min activa Auto-refresh en el menú de Streamlit (⋮ arriba a la derecha → Settings → Run on save).")
+    st.markdown('</div>', unsafe_allow_html=True)
