@@ -98,7 +98,7 @@ def get_data(interval="1d", period="2y"):
 
 @st.cache_data(ttl=300)
 def add_indicators(df_json):
-    df = pd.read_json(df_json)
+    df = pd.read_json(df_json, orient='split')
     df['EMA_20']    = ta.trend.ema_indicator(df['Close'], window=20)
     df['EMA_50']    = ta.trend.ema_indicator(df['Close'], window=50)
     df['EMA_200']   = ta.trend.ema_indicator(df['Close'], window=200)
@@ -124,7 +124,7 @@ def add_indicators(df_json):
 def get_signal():
     raw = get_data("1d","2y")
     if raw is None: return None
-    df = add_indicators(raw.to_json())
+    df = add_indicators(raw.to_json(orient='split'))
     df['Future_Return'] = df['Close'].pct_change(5).shift(-5)
     df['Target'] = 0
     df.loc[df['Future_Return'] >  0.003,'Target'] =  1
@@ -454,7 +454,7 @@ with tab5:
 
     dfc = get_data(INTERVALS[tf_h], PERIODS[tf_h])
     if dfc is not None:
-        dfc = add_indicators(dfc.to_json())
+        dfc = add_indicators(dfc.to_json(orient='split'))
         dp  = dfc.tail(120)
         fig = make_subplots(rows=2,cols=1,shared_xaxes=True,row_heights=[0.75,0.25])
         if "Velas" in ct:
