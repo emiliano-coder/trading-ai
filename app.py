@@ -16,26 +16,19 @@ import io
 import json
 import base64
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 try:
     from streamlit_autorefresh import st_autorefresh
     HAS_AUTOREFRESH = True
 except:
     HAS_AUTOREFRESH = False
-from plotly.subplots import make_subplots
 warnings.filterwarnings('ignore')
-
-# Auto-refresh cada 30 segundos para precio en vivo
-try:
-    from streamlit_autorefresh import st_autorefresh
-    _autorefresh = True
-except:
-    _autorefresh = False
 
 st.set_page_config(page_title="MIMI-AI", page_icon="🏛️", layout="wide")
 
-# ── AUTO REFRESH ─────────────────────────────────────────────────
-if _autorefresh:
-    st_autorefresh(interval=30000, limit=None, key="price_refresh")
+# ── AUTO REFRESH — precio cada 3s, todo lo demás cacheado ────────
+if HAS_AUTOREFRESH:
+    st_autorefresh(interval=3000, limit=None, key="price_tick")
 
 # ── SECRETS ──────────────────────────────────────────────────────
 try:
@@ -43,28 +36,59 @@ try:
     TG_CHAT_ID = st.secrets["TG_CHAT_ID"]
     GH_TOKEN   = st.secrets["GITHUB_TOKEN"]
     GH_REPO    = st.secrets["GITHUB_REPO"]
+    # Opcional para precio más rápido (gratis en twelvedata.com)
+    # TWELVEDATA_KEY = st.secrets.get("TWELVEDATA_KEY","")
 except:
     TG_TOKEN = TG_CHAT_ID = GH_TOKEN = GH_REPO = ''
 
-# ── PRECIO EN VIVO (TICK) ────────────────────────────────────────
+# ── PRECIO EN VIVO — dual source, sin bloquear el modelo ────────
+# Fuente 1: TwelveData (gratis, rápido, sin tarjeta)
+# Fuente 2: yfinance 1m como fallback
+
+@st.cache_data(ttl=3)   # cache solo 3 segundos — precio casi en tiempo real
 def get_precio_vivo():
-    """Jala el precio más reciente disponible — intervalo 1m"""
+    # Intenta TwelveData primero (más rápido)
+    try:
+        td_key = st.secrets.get("TWELVEDATA_KEY", "")
+        if td_key:
+            r = requests.get(
+                f"https://api.twelvedata.com/quote?symbol=XAU/USD&apikey={td_key}",
+                timeout=2)
+            if r.status_code == 200:
+                d = r.json()
+                p     = float(d.get("close", 0))
+                prev  = float(d.get("previous_close", p))
+                h52   = float(d.get("fifty_two_week", {}).get("high", p))
+                l52   = float(d.get("fifty_two_week", {}).get("low", p))
+                if p > 100:
+                    return {
+                        'precio': round(p, 2), 'prev': round(prev, 2),
+                        'cambio': round(p-prev, 2),
+                        'cambio_pct': round((p-prev)/prev*100, 3) if prev else 0,
+                        'high': round(float(d.get("high", p)), 2),
+                        'low':  round(float(d.get("low", p)), 2),
+                        'open': round(float(d.get("open", p)), 2),
+                        'hora': d.get("datetime", "")[:16],
+                        'fuente': 'TwelveData', 'vivo': True
+                    }
+    except: pass
+
+    # Fallback: yfinance 1m (puede tener 1-2 min de retraso)
     try:
         df_tick = yf.download("GC=F", period="1d", interval="1m", progress=False)
         if df_tick is not None and len(df_tick) > 0:
             df_tick.columns = [c[0] if isinstance(c,tuple) else c for c in df_tick.columns]
-            last = df_tick.iloc[-1]
-            prev = df_tick.iloc[-2] if len(df_tick) > 1 else last
+            last = df_tick.iloc[-1]; prev_row = df_tick.iloc[-2] if len(df_tick)>1 else last
+            p = float(last['Close']); prev = float(prev_row['Close'])
             return {
-                'precio':   round(float(last['Close']), 2),
-                'open':     round(float(last['Open']), 2),
-                'high':     round(float(last['High']), 2),
-                'low':      round(float(last['Low']), 2),
-                'prev':     round(float(prev['Close']), 2),
-                'cambio':   round(float(last['Close']) - float(prev['Close']), 2),
-                'cambio_pct': round((float(last['Close']) - float(prev['Close'])) / float(prev['Close']) * 100, 3),
-                'hora':     str(df_tick.index[-1]),
-                'vivo':     True
+                'precio': round(p,2), 'prev': round(prev,2),
+                'cambio': round(p-prev,2),
+                'cambio_pct': round((p-prev)/prev*100,3) if prev else 0,
+                'high':  round(float(last['High']),2),
+                'low':   round(float(last['Low']),2),
+                'open':  round(float(last['Open']),2),
+                'hora':  str(df_tick.index[-1])[11:16],
+                'fuente':'yfinance 1m', 'vivo': True
             }
     except: pass
     return None
@@ -756,23 +780,14 @@ st.markdown(f"""
     </span>
   </div>
   <div style="text-align:right;font-family:'Philosopher',serif;color:{T['primary']}88;font-size:.82em;line-height:1.8;">
-    {"H: $"+str(tick['high']:,.2f)+"  L: $"+str(tick['low']:,.2f) if tick else ""}
-    <br>Modo: {st.session_state.modo} · {st.session_state.trade_style} · Auto-refresh 30s
+    f"H: ${tick['high']:,.2f}  L: ${tick['low']:,.2f}" if tick else ""
+    <br>Modo: {st.session_state.modo} · {st.session_state.trade_style} · Auto-refresh 3s · TwelveData
   </div>
 </div>
 """, unsafe_allow_html=True)
 
-# ── LIVE PRICE DISPLAY ───────────────────────────────────────────
-if HAS_AUTOREFRESH:
-    count = st_autorefresh(interval=15000, limit=None, key="live_refresh")
-
-# Live price box
-precio_color = '#4CAF82' if pred==1 else '#C0392B' if pred==-1 else T['primary']
-live_html = f'<div style="text-align:center;margin:8px 0;"><span style="font-family:Cinzel,serif;font-size:clamp(2rem,6vw,3.5rem);font-weight:900;color:{precio_color};filter:drop-shadow(0 0 20px {precio_color}66);letter-spacing:4px;">${precio:,.2f}</span><span style="font-family:Philosopher,serif;color:{T[chr(39)+chr(112)+chr(114)+chr(105)+chr(109)+chr(97)+chr(114)+chr(121)+chr(39)}77;font-size:.85em;margin-left:12px;">XAU/USD</span><span style="font-family:Philosopher,serif;color:#88888877;font-size:.75em;margin-left:8px;">actualizado {ahora.strftime("%H:%M:%S")}</span></div>'
-st.markdown(live_html, unsafe_allow_html=True)
-
 c1,c2,c3,c4,c5,c6 = st.columns(6)
-c1.metric("💰 Precio Vivo", f"${precio_display:,.2f}", f"{cambio_display:+.2f}")
+c1.metric("💰 Precio Vivo", f"${precio_display:,.2f}", f"{cambio_display:+.2f} ({cambio_pct_display:+.3f}%)")
 c2.metric("📊 RSI",f"{rsi:.1f}","Sobrecomprado" if rsi>70 else "Sobrevendido" if rsi<30 else "Normal")
 c3.metric("⚡ ATR",f"{atr:.2f}")
 c4.metric("🎯 Señal","LONG" if pred==1 else "SHORT" if pred==-1 else "LATERAL",f"{conf:.1f}%")
