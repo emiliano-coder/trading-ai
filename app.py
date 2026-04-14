@@ -16,10 +16,26 @@ import io
 import json
 import base64
 import plotly.graph_objects as go
+try:
+    from streamlit_autorefresh import st_autorefresh
+    HAS_AUTOREFRESH = True
+except:
+    HAS_AUTOREFRESH = False
 from plotly.subplots import make_subplots
 warnings.filterwarnings('ignore')
 
+# Auto-refresh cada 30 segundos para precio en vivo
+try:
+    from streamlit_autorefresh import st_autorefresh
+    _autorefresh = True
+except:
+    _autorefresh = False
+
 st.set_page_config(page_title="MIMI-AI", page_icon="🏛️", layout="wide")
+
+# ── AUTO REFRESH ─────────────────────────────────────────────────
+if _autorefresh:
+    st_autorefresh(interval=30000, limit=None, key="price_refresh")
 
 # ── SECRETS ──────────────────────────────────────────────────────
 try:
@@ -29,6 +45,29 @@ try:
     GH_REPO    = st.secrets["GITHUB_REPO"]
 except:
     TG_TOKEN = TG_CHAT_ID = GH_TOKEN = GH_REPO = ''
+
+# ── PRECIO EN VIVO (TICK) ────────────────────────────────────────
+def get_precio_vivo():
+    """Jala el precio más reciente disponible — intervalo 1m"""
+    try:
+        df_tick = yf.download("GC=F", period="1d", interval="1m", progress=False)
+        if df_tick is not None and len(df_tick) > 0:
+            df_tick.columns = [c[0] if isinstance(c,tuple) else c for c in df_tick.columns]
+            last = df_tick.iloc[-1]
+            prev = df_tick.iloc[-2] if len(df_tick) > 1 else last
+            return {
+                'precio':   round(float(last['Close']), 2),
+                'open':     round(float(last['Open']), 2),
+                'high':     round(float(last['High']), 2),
+                'low':      round(float(last['Low']), 2),
+                'prev':     round(float(prev['Close']), 2),
+                'cambio':   round(float(last['Close']) - float(prev['Close']), 2),
+                'cambio_pct': round((float(last['Close']) - float(prev['Close'])) / float(prev['Close']) * 100, 3),
+                'hora':     str(df_tick.index[-1]),
+                'vivo':     True
+            }
+    except: pass
+    return None
 
 # ── GITHUB PERSISTENCE ───────────────────────────────────────────
 GH_FILE = "mimi_data.json"
@@ -694,8 +733,46 @@ st.markdown(f"""
 <div class="greek-orn">── ✦ ── ✦ ── ✦ ──</div>
 """, unsafe_allow_html=True)
 
+# ── PRECIO EN VIVO ───────────────────────────────────────────────
+tick = get_precio_vivo()
+precio_display = tick['precio'] if tick else precio
+cambio_display = tick['cambio'] if tick else 0
+cambio_pct_display = tick['cambio_pct'] if tick else 0
+hora_display = tick['hora'][11:16] if tick else "—"
+precio_color = '#4CAF82' if cambio_display >= 0 else '#C0392B'
+flecha = '▲' if cambio_display >= 0 else '▼'
+
+# Live price banner
+st.markdown(f"""
+<div style="background:linear-gradient(90deg,{T['card']},{T['bg']},{T['card']});
+  border:1px solid {precio_color}44;border-radius:4px;padding:12px 20px;
+  margin:8px 0;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;">
+  <div>
+    <span style="font-family:'Cinzel',serif;color:{T['primary']}88;font-size:.75em;letter-spacing:3px;">XAU/USD · EN VIVO · {hora_display}</span><br>
+    <span style="font-family:'Cinzel',serif;font-size:clamp(1.4rem,4vw,2.2rem);font-weight:900;color:{precio_color};
+      filter:drop-shadow(0 0 12px {precio_color}66);">${precio_display:,.2f}</span>
+    <span style="font-family:'Philosopher',serif;color:{precio_color};font-size:1em;margin-left:12px;">
+      {flecha} {abs(cambio_display):.2f} ({cambio_pct_display:+.3f}%)
+    </span>
+  </div>
+  <div style="text-align:right;font-family:'Philosopher',serif;color:{T['primary']}88;font-size:.82em;line-height:1.8;">
+    {"H: $"+str(tick['high']:,.2f)+"  L: $"+str(tick['low']:,.2f) if tick else ""}
+    <br>Modo: {st.session_state.modo} · {st.session_state.trade_style} · Auto-refresh 30s
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+# ── LIVE PRICE DISPLAY ───────────────────────────────────────────
+if HAS_AUTOREFRESH:
+    count = st_autorefresh(interval=15000, limit=None, key="live_refresh")
+
+# Live price box
+precio_color = '#4CAF82' if pred==1 else '#C0392B' if pred==-1 else T['primary']
+live_html = f'<div style="text-align:center;margin:8px 0;"><span style="font-family:Cinzel,serif;font-size:clamp(2rem,6vw,3.5rem);font-weight:900;color:{precio_color};filter:drop-shadow(0 0 20px {precio_color}66);letter-spacing:4px;">${precio:,.2f}</span><span style="font-family:Philosopher,serif;color:{T[chr(39)+chr(112)+chr(114)+chr(105)+chr(109)+chr(97)+chr(114)+chr(121)+chr(39)}77;font-size:.85em;margin-left:12px;">XAU/USD</span><span style="font-family:Philosopher,serif;color:#88888877;font-size:.75em;margin-left:8px;">actualizado {ahora.strftime("%H:%M:%S")}</span></div>'
+st.markdown(live_html, unsafe_allow_html=True)
+
 c1,c2,c3,c4,c5,c6 = st.columns(6)
-c1.metric("🏛️ XAU/USD", f"${precio:,.2f}")
+c1.metric("💰 Precio Vivo", f"${precio_display:,.2f}", f"{cambio_display:+.2f}")
 c2.metric("📊 RSI",f"{rsi:.1f}","Sobrecomprado" if rsi>70 else "Sobrevendido" if rsi<30 else "Normal")
 c3.metric("⚡ ATR",f"{atr:.2f}")
 c4.metric("🎯 Señal","LONG" if pred==1 else "SHORT" if pred==-1 else "LATERAL",f"{conf:.1f}%")
