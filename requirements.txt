@@ -1,4 +1,5 @@
 streamlit
+streamlit-autorefresh
 yfinance
 scikit-learn
 pytz
@@ -7,3 +8,4 @@ pandas
 joblib
 ta
 plotly
+requests
