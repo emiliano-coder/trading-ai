@@ -17,18 +17,10 @@ import json
 import base64
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-try:
-    from streamlit_autorefresh import st_autorefresh
-    HAS_AUTOREFRESH = True
-except:
-    HAS_AUTOREFRESH = False
+import streamlit.components.v1 as components
 warnings.filterwarnings('ignore')
 
 st.set_page_config(page_title="MIMI-AI", page_icon="🏛️", layout="wide")
-
-# ── AUTO REFRESH — precio cada 3s, modelo cacheado 10min ─────────
-if HAS_AUTOREFRESH:
-    st_autorefresh(interval=3000, limit=None, key="price_tick")
 
 # ── SECRETS ──────────────────────────────────────────────────────
 try:
@@ -41,58 +33,16 @@ except:
     TG_TOKEN = TG_CHAT_ID = GH_TOKEN = GH_REPO = TWELVEDATA_KEY = ''
 
 # ════════════════════════════════════════════════════════════════
-#  CAPA RÁPIDA — PRECIO EN VIVO (ttl=3s)
-#  Solo trae precio, no recalcula modelo
+#  PRECIO FALLBACK — solo para lógica interna (paper trades, etc.)
+#  El precio visual en pantalla lo maneja el widget JS
 # ════════════════════════════════════════════════════════════════
-@st.cache_data(ttl=3)
-def get_precio_vivo():
-    # Fuente 1: TwelveData — más rápido, sin retraso
-    if TWELVEDATA_KEY:
-        try:
-            r = requests.get(
-                f"https://api.twelvedata.com/quote?symbol=XAU/USD&apikey={TWELVEDATA_KEY}",
-                timeout=3)
-            if r.status_code == 200:
-                d = r.json()
-                p    = float(d.get("close", 0))
-                prev = float(d.get("previous_close", p))
-                if p > 100:
-                    return {
-                        'precio':      round(p, 2),
-                        'prev':        round(prev, 2),
-                        'cambio':      round(p - prev, 2),
-                        'cambio_pct':  round((p - prev) / prev * 100, 3) if prev else 0,
-                        'high':        round(float(d.get("high", p)), 2),
-                        'low':         round(float(d.get("low", p)), 2),
-                        'open':        round(float(d.get("open", p)), 2),
-                        'hora':        d.get("datetime", "")[:16],
-                        'fuente':      'TwelveData',
-                        'vivo':        True
-                    }
-        except: pass
-
-    # Fuente 2: yfinance 1m — fallback
+def get_precio_fallback():
+    """Precio para lógica interna — no para display visual"""
     try:
         df_tick = yf.download("GC=F", period="1d", interval="1m", progress=False)
         if df_tick is not None and len(df_tick) > 1:
             df_tick.columns = [c[0] if isinstance(c, tuple) else c for c in df_tick.columns]
-            # Tomar siempre la vela más reciente cerrada
-            last     = df_tick.iloc[-1]
-            prev_row = df_tick.iloc[-2]
-            p    = float(last['Close'])
-            prev = float(prev_row['Close'])
-            return {
-                'precio':      round(p, 2),
-                'prev':        round(prev, 2),
-                'cambio':      round(p - prev, 2),
-                'cambio_pct':  round((p - prev) / prev * 100, 3) if prev else 0,
-                'high':        round(float(last['High']), 2),
-                'low':         round(float(last['Low']), 2),
-                'open':        round(float(last['Open']), 2),
-                'hora':        str(df_tick.index[-1])[11:16],
-                'fuente':      'yfinance 1m',
-                'vivo':        True
-            }
+            return float(df_tick['Close'].iloc[-1])
     except: pass
     return None
 
@@ -764,7 +714,7 @@ with st.sidebar:
     st.markdown(f'<div style="font-family:Cinzel,serif;color:{T["primary"]}99;font-size:.8em;letter-spacing:2px;">📱 TELEGRAM</div>', unsafe_allow_html=True)
     st.caption("entré · no · salgo · estado · señal · wyckoff · me quedo")
     st.markdown("---")
-    fuente_txt = f"🟢 TwelveData activo" if TWELVEDATA_KEY else "🟡 yfinance (agrega TWELVEDATA_KEY en Secrets)"
+    fuente_txt = f"🟢 TwelveData activo — precio JS live" if TWELVEDATA_KEY else "🟡 yfinance fallback (agrega TWELVEDATA_KEY en Secrets)"
     st.caption(fuente_txt)
     st.markdown("---")
     st.markdown(f'<div style="font-family:Cinzel,serif;color:{T["primary"]}99;font-size:.8em;letter-spacing:2px;">📚 GUÍA</div>', unsafe_allow_html=True)
@@ -839,16 +789,11 @@ p_lat   = round(max(0,100-p_long-p_short-5),1)
 p_shock = round(100-p_long-p_short-p_lat,1)
 
 # ════════════════════════════════════════════════════════════════
-#  PRECIO EN VIVO (rápido, independiente del modelo)
+#  PRECIO INTERNO — para lógica de paper trades / señales
+#  (el precio visual lo actualiza el widget JS cada 2s)
 # ════════════════════════════════════════════════════════════════
-tick            = get_precio_vivo()
-precio          = tick['precio']    if tick else float(df['Close'].iloc[-1])
-cambio_display  = tick['cambio']    if tick else 0
-cambio_pct_disp = tick['cambio_pct']if tick else 0
-hora_display    = tick['hora'][11:16] if tick and len(tick.get('hora',''))>10 else "—"
-fuente_display  = tick['fuente']    if tick else "sin datos"
-precio_color    = '#4CAF82' if cambio_display>=0 else '#C0392B'
-flecha          = '▲' if cambio_display>=0 else '▼'
+_p_fallback = get_precio_fallback()
+precio       = _p_fallback if _p_fallback else float(df['Close'].iloc[-1])
 
 mx_tz = pytz.timezone('America/Mexico_City')
 ahora = datetime.now(mx_tz)
@@ -902,7 +847,7 @@ ge    = smc.get('gladiador_entry','')
 ge_str= f"  ⚔️ MICRO: {ge.replace('_',' ')}  ·" if ge and 'Gladiador' in st.session_state.modo else ""
 wy_str= f"  🏺 AMD: {wyckoff['active']['tipo']}  ·" if wyckoff.get('active') else ""
 b1 = (f"  {st.session_state.modo}  ·  {ET.get(pred)}  ·  CONF: {conf:.1f}%  ·  ${precio:,.2f}  ·  SL: ${sl_long:,.2f}  ·  TP: ${tp_long:,.2f}  ·  R:R 1:{rr}  ·  ATR: {atr:.2f}{ge_str}{wy_str}  ")*2
-b2 = (f"  RSI: {rsi:.1f}  ·  EMA20: ${ema20:,.2f}  ·  EMA50: ${ema50:,.2f}  ·  SMC: {smc['bias']}  ·  BOS: {len(smc['bos'])}  ·  OB: {len(smc['order_blocks'])}  ·  FVG: {len(smc['fvg'])}  ·  Wyckoff: {wyckoff['trend']}  ·  {fuente_display}  ")*2
+b2 = (f"  RSI: {rsi:.1f}  ·  EMA20: ${ema20:,.2f}  ·  EMA50: ${ema50:,.2f}  ·  SMC: {smc['bias']}  ·  BOS: {len(smc['bos'])}  ·  OB: {len(smc['order_blocks'])}  ·  FVG: {len(smc['fvg'])}  ·  Wyckoff: {wyckoff['trend']}  ·  Precio JS live  ")*2
 st.markdown(f"""
 <div class="ticker-wrap">
   <span class="ticker-label">ORACLE</span>
@@ -920,29 +865,213 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # ════════════════════════════════════════════════════════════════
-#  PRECIO EN VIVO — BANNER PRINCIPAL
+#  WIDGET JS — PRECIO EN VIVO SIN RECARGAR STREAMLIT
+#  Llama a TwelveData directo desde el navegador cada 2s
 # ════════════════════════════════════════════════════════════════
-st.markdown(f"""
-<div style="background:linear-gradient(90deg,{T['card']},{T['bg']},{T['card']});
-  border:1px solid {precio_color}44;border-radius:4px;padding:12px 20px;
-  margin:8px 0;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;">
-  <div>
-    <span style="font-family:'Cinzel',serif;color:{T['primary']}88;font-size:.75em;letter-spacing:3px;">XAU/USD · {fuente_display.upper()} · {hora_display}</span><br>
-    <span style="font-family:'Cinzel',serif;font-size:clamp(1.4rem,4vw,2.2rem);font-weight:900;color:{precio_color};
-      filter:drop-shadow(0 0 12px {precio_color}66);">${precio:,.2f}</span>
-    <span style="font-family:'Philosopher',serif;color:{precio_color};font-size:1em;margin-left:12px;">
-      {flecha} {abs(cambio_display):.2f} ({cambio_pct_disp:+.3f}%)
+_td_key   = TWELVEDATA_KEY or ""
+_primary  = T['primary']
+_card     = T['card']
+_bg       = T['bg']
+
+components.html(f"""
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@700;900&family=Philosopher&display=swap');
+  * {{ margin:0; padding:0; box-sizing:border-box; }}
+  body {{ background:transparent; font-family:'Philosopher',serif; }}
+
+  .wrap {{
+    background: linear-gradient(90deg, {_card}, {_bg}, {_card});
+    border: 1px solid {_primary}44;
+    border-radius: 4px;
+    padding: 14px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px;
+  }}
+
+  .left {{ display:flex; flex-direction:column; gap:4px; }}
+
+  .label {{
+    font-family: 'Cinzel', serif;
+    color: {_primary}88;
+    font-size: 11px;
+    letter-spacing: 3px;
+  }}
+
+  .price {{
+    font-family: 'Cinzel', serif;
+    font-size: clamp(1.6rem, 4vw, 2.4rem);
+    font-weight: 900;
+    transition: color 0.3s, text-shadow 0.3s;
+  }}
+
+  .change {{
+    font-family: 'Philosopher', serif;
+    font-size: 1em;
+    margin-left: 10px;
+    transition: color 0.3s;
+  }}
+
+  .right {{
+    text-align: right;
+    font-family: 'Philosopher', serif;
+    color: {_primary}88;
+    font-size: 13px;
+    line-height: 1.9;
+  }}
+
+  .dot {{
+    display: inline-block;
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: #4CAF82;
+    margin-right: 5px;
+    animation: pulse 1.5s infinite;
+  }}
+  @keyframes pulse {{
+    0%,100% {{ opacity:1; transform:scale(1); }}
+    50%      {{ opacity:.4; transform:scale(1.3); }}
+  }}
+
+  .flash-up   {{ animation: fu .4s ease; }}
+  .flash-down {{ animation: fd .4s ease; }}
+  @keyframes fu {{ 0%{{opacity:.3}} 100%{{opacity:1}} }}
+  @keyframes fd {{ 0%{{opacity:.3}} 100%{{opacity:1}} }}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="left">
+    <span class="label">
+      <span class="dot" id="dot"></span>
+      XAU/USD &nbsp;·&nbsp; <span id="src">—</span> &nbsp;·&nbsp; <span id="hora">--:--</span>
     </span>
+    <div>
+      <span class="price" id="precio" style="color:#C8A96E;">— — —</span>
+      <span class="change" id="cambio" style="color:#C8A96E;"></span>
+    </div>
   </div>
-  <div style="text-align:right;font-family:'Philosopher',serif;color:{T['primary']}88;font-size:.82em;line-height:1.8;">
-    {"H: $"+str(tick['high'])+"  L: $"+str(tick['low']) if tick else ""}
-    <br>Modelo: caché 10min · Precio: live 3s · {st.session_state.modo}
+  <div class="right" id="hl">
+    H: — &nbsp; L: —<br>
+    <span style="font-size:11px;letter-spacing:1px;">Precio live JS · Modelo caché 10min</span>
   </div>
 </div>
-""", unsafe_allow_html=True)
+
+<script>
+const TD_KEY = "{_td_key}";
+let prevPrice = null;
+
+async function fetchTD() {{
+  try {{
+    const r  = await fetch(`https://api.twelvedata.com/quote?symbol=XAU/USD&apikey=${{TD_KEY}}`, {{signal: AbortSignal.timeout(3000)}});
+    const d  = await r.json();
+    const p  = parseFloat(d.close);
+    const pc = parseFloat(d.previous_close || p);
+    if (!p || p < 100) throw new Error("bad data");
+    const ch    = p - pc;
+    const chpct = (ch / pc * 100).toFixed(3);
+    const time  = (d.datetime || "").slice(11,16);
+    return {{
+      precio: p.toFixed(2),
+      cambio: ch.toFixed(2),
+      cambio_pct: chpct,
+      high:   parseFloat(d.high  || p).toFixed(2),
+      low:    parseFloat(d.low   || p).toFixed(2),
+      hora:   time,
+      src:    "TwelveData"
+    }};
+  }} catch(e) {{ return null; }}
+}}
+
+async function fetchYF() {{
+  // Fallback: yfinance proxy via allorigins
+  try {{
+    const url = "https://query1.finance.yahoo.com/v8/finance/chart/GC%3DF?interval=1m&range=1d";
+    const r   = await fetch("https://api.allorigins.win/get?url=" + encodeURIComponent(url), {{signal: AbortSignal.timeout(4000)}});
+    const raw = await r.json();
+    const data= JSON.parse(raw.contents);
+    const q   = data.chart.result[0];
+    const closes = q.indicators.quote[0].close.filter(x=>x!=null);
+    const p   = closes[closes.length - 1];
+    const pc  = closes[closes.length - 2] || p;
+    const highs  = q.indicators.quote[0].high.filter(x=>x!=null);
+    const lows   = q.indicators.quote[0].low.filter(x=>x!=null);
+    const ch  = p - pc;
+    const ts  = q.timestamp[q.timestamp.length-1];
+    const t   = new Date(ts*1000);
+    const hh  = String(t.getHours()).padStart(2,"0");
+    const mm  = String(t.getMinutes()).padStart(2,"0");
+    return {{
+      precio: p.toFixed(2),
+      cambio: ch.toFixed(2),
+      cambio_pct: (ch/pc*100).toFixed(3),
+      high:   Math.max(...highs.slice(-20)).toFixed(2),
+      low:    Math.min(...lows.slice(-20)).toFixed(2),
+      hora:   hh+":"+mm,
+      src:    "yfinance"
+    }};
+  }} catch(e) {{ return null; }}
+}}
+
+function update(tick) {{
+  if (!tick) return;
+  const up    = parseFloat(tick.cambio) >= 0;
+  const color = up ? "#4CAF82" : "#C0392B";
+  const flecha= up ? "▲" : "▼";
+  const sign  = up ? "+" : "";
+
+  const el = document.getElementById("precio");
+  const was = prevPrice;
+  prevPrice = tick.precio;
+
+  // Flash animation on change
+  if (was && was !== tick.precio) {{
+    el.classList.remove("flash-up","flash-down");
+    void el.offsetWidth;
+    el.classList.add(up ? "flash-up" : "flash-down");
+  }}
+
+  el.style.color      = color;
+  el.style.textShadow = `0 0 14px ${{color}}88`;
+  el.textContent      = "$" + parseFloat(tick.precio).toLocaleString("en-US", {{minimumFractionDigits:2, maximumFractionDigits:2}});
+
+  const ch = document.getElementById("cambio");
+  ch.style.color = color;
+  ch.textContent = `${{flecha}} ${{Math.abs(tick.cambio)}} (${{sign}}${{tick.cambio_pct}}%)`;
+
+  document.getElementById("hora").textContent = tick.hora;
+  document.getElementById("src").textContent  = tick.src;
+  document.getElementById("hl").innerHTML     =
+    `H: ${{tick.high}} &nbsp; L: ${{tick.low}}<br><span style="font-size:11px;letter-spacing:1px;">Precio live JS · Modelo caché 10min</span>`;
+
+  // Dot color
+  document.getElementById("dot").style.background = color;
+}}
+
+async function tick() {{
+  let data = TD_KEY ? await fetchTD() : null;
+  if (!data) data = await fetchYF();
+  update(data);
+}}
+
+tick();
+setInterval(tick, 2000);
+</script>
+</body>
+</html>
+""", height=90, scrolling=False)
+
+# Valor de precio para lógica interna (paper trades, Telegram, etc.)
+# Este no afecta el display — solo se usa internamente
+precio_color = '#4CAF82'  # default, widget JS maneja el color visual
 
 c1,c2,c3,c4,c5,c6,c7 = st.columns(7)
-c1.metric("💰 Precio",f"${precio:,.2f}",f"{cambio_display:+.2f}")
+c1.metric("💰 Precio",f"${precio:,.2f}")
 c2.metric("📊 RSI",f"{rsi:.1f}","SC" if rsi>70 else "SV" if rsi<30 else "OK")
 c3.metric("⚡ ATR",f"{atr:.2f}")
 c4.metric("🎯 Señal","LONG" if pred==1 else "SHORT" if pred==-1 else "LAT",f"{conf:.1f}%")
@@ -1313,14 +1442,14 @@ with tab9:
         aw=st.checkbox("⭐ Solo ventana activa",value=True)
     with col_b:
         if st.button("🧪 Prueba"):
-            ok=send_tg(f"🏛️ *MIMI-AI Test* ✅\nModo: {st.session_state.modo}\nPrecio: ${precio:,.2f}\nFuente: {fuente_display}\nWyckoff: {wyckoff['trend']}\nResponde 'señal' para ver señal.")
+            ok=send_tg(f"🏛️ *MIMI-AI Test* ✅\nModo: {st.session_state.modo}\nPrecio: ${precio:,.2f}\nWyckoff: {wyckoff['trend']}\nResponde 'señal' para ver señal.")
             st.success("Enviado ✅") if ok else st.error("Error — revisa Secrets")
         if st.button("📡 Enviar señal"):
             vens2=[(3,5),(8,11),(12,14),(15,17)]; ev=any(i<=h<f for i,f in vens2)
             if conf>=ac2 and ((pred==1 and al) or (pred==-1 and as_)) and ((not aw) or ev):
                 sl_r=sl_long if pred>=0 else sl_short; tp_r=tp_long if pred>=0 else tp_short
                 wy_msg=f"\n🏺 AMD: {wyckoff['active']['tipo']} @ ${wyckoff['active']['entrada']:,.2f}" if wyckoff.get('active') else ""
-                ok2=send_tg(f"🏛️ *MIMI-AI — {st.session_state.modo}*\n🕐 {ahora.strftime('%H:%M')} MX · {st.session_state.trade_style}\n💰 ${precio:,.2f} ({fuente_display})\n🎯 *{ET.get(pred)}*\n📊 {conf:.1f}% | SMC: {smc['bias']}{wy_msg}\n🔴 SL: ${sl_r:,.2f}\n🟢 TP: ${tp_r:,.2f}\n📐 R:R: 1:{rr}\n\n_Responde 'entré' o 'no'_")
+                ok2=send_tg(f"🏛️ *MIMI-AI — {st.session_state.modo}*\n🕐 {ahora.strftime('%H:%M')} MX · {st.session_state.trade_style}\n💰 ${precio:,.2f}\n🎯 *{ET.get(pred)}*\n📊 {conf:.1f}% | SMC: {smc['bias']}{wy_msg}\n🔴 SL: ${sl_r:,.2f}\n🟢 TP: ${tp_r:,.2f}\n📐 R:R: 1:{rr}\n\n_Responde 'entré' o 'no'_")
                 st.success("Enviado ✅") if ok2 else st.error("Error")
             else: st.info("Condiciones no cumplidas")
 
