@@ -43,11 +43,23 @@ except:
 from signal_generator import build_signal, save_signal_github
 
 # ════════════════════════════════════════════════════════════════
-#  PRECIO FALLBACK — solo para lógica interna (paper trades, etc.)
+#  PRECIO INTERNO — TwelveData primero, yfinance como emergencia
 #  El precio visual en pantalla lo maneja el widget JS
 # ════════════════════════════════════════════════════════════════
 def get_precio_fallback():
-    """Precio para lógica interna — no para display visual"""
+    """Precio para lógica interna (paper trades, SL/TP, Telegram)"""
+    # 1. TwelveData /price — más rápido y preciso
+    if TWELVEDATA_KEY:
+        try:
+            r = requests.get(
+                "https://api.twelvedata.com/price",
+                params={"symbol":"XAU/USD","apikey":TWELVEDATA_KEY},
+                timeout=4)
+            if r.status_code == 200:
+                p = float(r.json().get("price", 0))
+                if p > 100: return p
+        except: pass
+    # 2. yfinance 1m — último recurso
     try:
         df_tick = yf.download("GC=F", period="1d", interval="1m", progress=False)
         if df_tick is not None and len(df_tick) > 1:
@@ -57,20 +69,49 @@ def get_precio_fallback():
     return None
 
 # ════════════════════════════════════════════════════════════════
-#  CAPA PESADA — DATOS + MODELO (ttl=600s = 10min)
-#  Se recalcula cada 10 minutos, no en cada refresh
+#  TWELVEDATA — Fuente principal para TODO
+#  yfinance solo como fallback de emergencia
 # ════════════════════════════════════════════════════════════════
-@st.cache_data(ttl=300)  # 5 minutos
+TD_INTERVAL_MAP   = {"5m":"5min","15m":"15min","30m":"30min","1h":"1h","4h":"4h","1d":"1day"}
+TD_OUTPUTSIZE_MAP = {"5m":500,"15m":500,"30m":500,"1h":700,"4h":700,"1d":750}
+
+def _fetch_td_series(interval_yf, outputsize=500):
+    if not TWELVEDATA_KEY: return None
+    td_iv = TD_INTERVAL_MAP.get(interval_yf, "1day")
+    try:
+        r = requests.get("https://api.twelvedata.com/time_series",
+            params={"symbol":"XAU/USD","interval":td_iv,"outputsize":outputsize,
+                    "apikey":TWELVEDATA_KEY,"format":"JSON","order":"ASC"}, timeout=12)
+        if r.status_code != 200: return None
+        data = r.json()
+        if data.get("status") != "ok" or "values" not in data: return None
+        df = pd.DataFrame(data["values"])
+        df["datetime"] = pd.to_datetime(df["datetime"])
+        df.set_index("datetime", inplace=True)
+        df = df.rename(columns={"open":"Open","high":"High","low":"Low","close":"Close","volume":"Volume"})
+        for col in ["Open","High","Low","Close","Volume"]:
+            if col in df.columns: df[col] = pd.to_numeric(df[col], errors="coerce")
+        if "Volume" not in df.columns: df["Volume"] = 0
+        df.dropna(subset=["Open","High","Low","Close"], inplace=True)
+        return df if len(df) >= 50 else None
+    except: return None
+
+def _fetch_yf_fallback(interval, period):
+    try:
+        df = yf.download("GC=F", period=period, interval=interval, progress=False)
+        df.columns = [c[0] if isinstance(c,tuple) else c for c in df.columns]
+        df.dropna(inplace=True)
+        return df if len(df) >= 50 else None
+    except: return None
+
+@st.cache_data(ttl=300)
 def get_data(interval="1d", period="2y"):
-    df = yf.download("GC=F", period=period, interval=interval, progress=False)
-    df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
-    df.dropna(inplace=True)
-    if len(df) >= 50:
-        return df
-    df2 = yf.download("GC=F", period="2y", interval="1d", progress=False)
-    df2.columns = [c[0] if isinstance(c, tuple) else c for c in df2.columns]
-    df2.dropna(inplace=True)
-    return df2 if len(df2) >= 50 else None
+    outputsize = TD_OUTPUTSIZE_MAP.get(interval, 500)
+    df = _fetch_td_series(interval, outputsize)
+    if df is not None: return df
+    df = _fetch_yf_fallback(interval, period)
+    if df is not None: return df
+    return _fetch_yf_fallback("1d", "2y")
 
 @st.cache_data(ttl=300)  # 5 minutos
 def add_ind(df_json):
@@ -118,15 +159,20 @@ def train_model(df_json, umbral):
     m = rf if accuracy_score(yte, rf.predict(Xte)) >= accuracy_score(yte, gb.predict(Xte)) else gb
     return m, sc, feats, df
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=300)
 def mtf_conf():
+    """Multi-timeframe — TwelveData para todos los TFs"""
     sigs = {}
-    for name, iv, per in [("D1","1d","2y"),("H4","4h","180d"),("H1","1h","60d"),("M15","15m","10d")]:
+    tf_list = [("D1","1d",700),("H4","4h",600),("H1","1h",600),("M15","15m",500)]
+    for name, iv, osz in tf_list:
         try:
-            df = yf.download("GC=F", period=per, interval=iv, progress=False)
-            df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
-            df.dropna(inplace=True)
-            if len(df) < 30: continue
+            # TwelveData primero
+            df = _fetch_td_series(iv, osz)
+            # Fallback yfinance
+            if df is None:
+                period_map = {"1d":"2y","4h":"180d","1h":"60d","15m":"10d"}
+                df = _fetch_yf_fallback(iv, period_map.get(iv,"60d"))
+            if df is None or len(df) < 30: continue
             e20  = ta.trend.ema_indicator(df['Close'], window=20)
             e50  = ta.trend.ema_indicator(df['Close'], window=50)
             rsi  = ta.momentum.rsi(df['Close'], window=14)
@@ -737,7 +783,7 @@ with st.sidebar:
     st.markdown(f'<div style="font-family:Cinzel,serif;color:{T["primary"]}99;font-size:.8em;letter-spacing:2px;">📱 TELEGRAM</div>', unsafe_allow_html=True)
     st.caption("entré · no · salgo · estado · señal · wyckoff · me quedo")
     st.markdown("---")
-    fuente_txt = f"🟢 TwelveData activo — precio JS live" if TWELVEDATA_KEY else "🟡 yfinance fallback (agrega TWELVEDATA_KEY en Secrets)"
+    fuente_txt = "🟢 TwelveData — precio + datos + señales" if TWELVEDATA_KEY else "⚠️ Agrega TWELVEDATA_KEY en Secrets para datos precisos"
     st.caption(fuente_txt)
     st.markdown("---")
     st.markdown(f'<div style="font-family:Cinzel,serif;color:{T["primary"]}99;font-size:.8em;letter-spacing:2px;">📚 GUÍA</div>', unsafe_allow_html=True)
