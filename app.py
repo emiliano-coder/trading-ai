@@ -22,6 +22,12 @@ warnings.filterwarnings('ignore')
 
 st.set_page_config(page_title="MIMI-AI", page_icon="🏛️", layout="wide")
 
+# ── UPTIMEROBOT PING — responde rápido sin cargar la app ─────────
+# En UptimeRobot apunta a: https://tu-app.streamlit.app/?ping=1
+if st.query_params.get("ping") == "1":
+    st.write("ok")
+    st.stop()
+
 # ── SECRETS ──────────────────────────────────────────────────────
 try:
     TG_TOKEN        = st.secrets["TG_TOKEN"]
@@ -29,8 +35,12 @@ try:
     GH_TOKEN        = st.secrets["GITHUB_TOKEN"]
     GH_REPO         = st.secrets["GITHUB_REPO"]
     TWELVEDATA_KEY  = st.secrets.get("TWELVEDATA_KEY", "")
+    NEWS_API_KEY    = st.secrets.get("NEWS_API_KEY", "")
 except:
-    TG_TOKEN = TG_CHAT_ID = GH_TOKEN = GH_REPO = TWELVEDATA_KEY = ''
+    TG_TOKEN = TG_CHAT_ID = GH_TOKEN = GH_REPO = TWELVEDATA_KEY = NEWS_API_KEY = ''
+
+# Import signal generator
+from signal_generator import build_signal, save_signal_github
 
 # ════════════════════════════════════════════════════════════════
 #  PRECIO FALLBACK — solo para lógica interna (paper trades, etc.)
@@ -50,7 +60,7 @@ def get_precio_fallback():
 #  CAPA PESADA — DATOS + MODELO (ttl=600s = 10min)
 #  Se recalcula cada 10 minutos, no en cada refresh
 # ════════════════════════════════════════════════════════════════
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=300)  # 5 minutos
 def get_data(interval="1d", period="2y"):
     df = yf.download("GC=F", period=period, interval=interval, progress=False)
     df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
@@ -62,7 +72,7 @@ def get_data(interval="1d", period="2y"):
     df2.dropna(inplace=True)
     return df2 if len(df2) >= 50 else None
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=300)  # 5 minutos
 def add_ind(df_json):
     df = pd.read_json(io.StringIO(df_json), orient='split')
     df['EMA_20']    = ta.trend.ema_indicator(df['Close'], window=20)
@@ -86,7 +96,7 @@ def add_ind(df_json):
     df.dropna(inplace=True)
     return df
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=300)  # 5 minutos
 def train_model(df_json, umbral):
     df = pd.read_json(io.StringIO(df_json), orient='split')
     df['Future_Return'] = df['Close'].pct_change(5).shift(-5)
@@ -711,6 +721,19 @@ with st.sidebar:
 
     risk_pct = st.slider("⚠️ Riesgo/trade (%)", 0.5, 5.0, 1.0, 0.5)
     st.markdown("---")
+
+    # ── MODO AUTOMÁTICO ───────────────────────────────────────────
+    st.markdown(f'<div style="font-family:Cinzel,serif;color:{T["primary"] if "T" in dir() else "#C8A96E"}99;font-size:.8em;letter-spacing:2px;">🤖 MODO AUTO</div>', unsafe_allow_html=True)
+    auto_mode = st.toggle("Activar señales automáticas", value=st.session_state.get('auto_mode', False))
+    if auto_mode != st.session_state.get('auto_mode', False):
+        st.session_state.auto_mode = auto_mode
+        estado_txt = "activado" if auto_mode else "desactivado"
+        send_tg(f"🤖 *Modo automático {estado_txt}*\n{'Las señales se enviarán a Telegram automáticamente.' if auto_mode else 'Solo análisis — sin envíos automáticos.'}")
+    if auto_mode:
+        st.caption("🟢 Señales ≥60% se envían solas a Telegram")
+    else:
+        st.caption("⚪ Solo análisis — sin envíos automáticos")
+    st.markdown("---")
     st.markdown(f'<div style="font-family:Cinzel,serif;color:{T["primary"]}99;font-size:.8em;letter-spacing:2px;">📱 TELEGRAM</div>', unsafe_allow_html=True)
     st.caption("entré · no · salgo · estado · señal · wyckoff · me quedo")
     st.markdown("---")
@@ -835,6 +858,33 @@ sv2 = {'paper_trades':st.session_state.paper_trades,'signal_history':st.session_
        'capital':st.session_state.capital,'trade_style':st.session_state.trade_style,
        'modo':st.session_state.modo,'last_tg_update':st.session_state.last_tg_update}
 gh_save(sv2)
+
+# ── GUARDAR SEÑAL EN GITHUB (para telegram_bot.py) ───────────────
+# Genera y guarda signal.json cada vez que hay señal nueva
+_auto_mode = st.session_state.get('auto_mode', False)
+if pred != 0 and conf >= 60:
+    _signal = build_signal(pred, prob, precio, sl_long, tp_long,
+                           sl_short, tp_short, conf,
+                           smc['bias'], wyckoff['trend'])
+    save_signal_github(_signal, GH_TOKEN, GH_REPO)
+
+    # Si modo automático está ON — manda notificación Telegram
+    if _auto_mode:
+        _sl_r = sl_long if pred == 1 else sl_short
+        _tp_r = tp_long if pred == 1 else tp_short
+        _rr   = round(abs(_tp_r - precio) / abs(precio - _sl_r), 2) if abs(precio - _sl_r) > 0 else 0
+        _icon = "📈" if pred == 1 else "📉"
+        send_tg(
+            f"🏛️ *MIMI\\-AI — SEÑAL AUTO*\n"
+            f"{_icon} *{ET.get(pred)}*\n"
+            f"💰 Entrada: `${precio:,.2f}`\n"
+            f"🔴 SL: `${_sl_r:,.2f}`\n"
+            f"🟢 TP: `${_tp_r:,.2f}`\n"
+            f"📊 Confianza: `{conf:.1f}%`\n"
+            f"📐 R:R: `1:{_rr}`\n"
+            f"SMC: {smc['bias']} · Wyckoff: {wyckoff['trend']}\n\n"
+            f"_Responde 'entré' para registrar o 'no' para rechazar_"
+        )
 
 # Procesar Telegram
 process_tg_updates(precio, pred, prob, rsi, atr, sl_long, tp_long, sl_short, tp_short, rr, smc, conf, ET, risk_pct, wyckoff)
