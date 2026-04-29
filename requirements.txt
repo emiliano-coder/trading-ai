@@ -9,3 +9,4 @@ joblib
 ta
 plotly
 requests
+pandas_datareader
