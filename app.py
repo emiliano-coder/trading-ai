@@ -1156,55 +1156,130 @@ components.html(f"""
 <script>
 const FH_KEY = "{_fh_key}";
 const TD_KEY = "{_td_key}";
-let prevPrice = null;
+let prevPrice  = null;
+let prevClose  = null;   // precio de cierre anterior para calcular cambio
+let ws         = null;
+let wsAlive    = false;
+let restTimer  = null;
 
-// ── Fuente 1: Finnhub — 60 calls/min, sin límite práctico ────────
-async function fetchFinnhub() {{
+// ══════════════════════════════════════════════════════════════
+//  FUENTE 1: Finnhub WebSocket — tiempo real, gratis
+//  El WebSocket manda cada trade de OANDA:XAU_USD al instante
+// ══════════════════════════════════════════════════════════════
+function conectarWS() {{
+  if (!FH_KEY) {{ iniciarREST(); return; }}
+  try {{
+    ws = new WebSocket(`wss://ws.finnhub.io?token=${{FH_KEY}}`);
+
+    ws.onopen = () => {{
+      wsAlive = true;
+      ws.send(JSON.stringify({{type:"subscribe", symbol:"OANDA:XAU_USD"}}));
+      document.getElementById("src").textContent = "Finnhub WS ⚡";
+    }};
+
+    ws.onmessage = (e) => {{
+      try {{
+        const msg = JSON.parse(e.data);
+        if (msg.type !== "trade" || !msg.data || !msg.data.length) return;
+        // Tomar el trade más reciente
+        const trades = msg.data;
+        const last   = trades[trades.length - 1];
+        const p      = parseFloat(last.p);
+        if (!p || p < 100) return;
+
+        // Guardar prevClose la primera vez
+        if (!prevClose) prevClose = p;
+        const ch    = p - prevClose;
+        const chpct = (ch / prevClose * 100).toFixed(3);
+        const ts    = new Date(last.t);
+        const hh    = String(ts.getHours()).padStart(2,"0");
+        const mm    = String(ts.getMinutes()).padStart(2,"0");
+
+        actualizarUI({{
+          precio:     p.toFixed(2),
+          cambio:     ch.toFixed(2),
+          cambio_pct: chpct,
+          high:       p.toFixed(2),
+          low:        p.toFixed(2),
+          hora:       hh + ":" + mm,
+          src:        "Finnhub WS ⚡"
+        }});
+      }} catch(err) {{}}
+    }};
+
+    ws.onerror = () => {{ wsAlive = false; iniciarREST(); }};
+
+    ws.onclose = () => {{
+      wsAlive = false;
+      // Reconectar después de 5 segundos
+      setTimeout(conectarWS, 5000);
+    }};
+
+    // Keepalive ping cada 20s (Finnhub desconecta si no hay actividad)
+    setInterval(() => {{
+      if (ws && ws.readyState === WebSocket.OPEN) {{
+        ws.send(JSON.stringify({{type:"ping"}}));
+      }}
+    }}, 20000);
+
+  }} catch(e) {{ iniciarREST(); }}
+}}
+
+// ══════════════════════════════════════════════════════════════
+//  FUENTE 2: Finnhub REST — fallback si WS falla
+//  Usa /forex/rates que da spot XAU/USD más preciso que /quote
+// ══════════════════════════════════════════════════════════════
+async function fetchFinnhubREST() {{
   if (!FH_KEY) return null;
   try {{
+    // forex/rates?base=USD da la cantidad de USD por unidad de cada moneda
+    // Para XAU necesitamos invertir: 1/XAU_rate = precio de 1 oz en USD
     const r = await fetch(
-      `https://finnhub.io/api/v1/quote?symbol=OANDA:XAU_USD&token=${{FH_KEY}}`,
-      {{signal: AbortSignal.timeout(3000)}}
+      `https://finnhub.io/api/v1/forex/rates?base=XAU&token=${{FH_KEY}}`,
+      {{signal: AbortSignal.timeout(4000)}}
     );
     if (!r.ok) return null;
-    const d  = await r.json();
-    const p  = parseFloat(d.c);    // current price
-    const pc = parseFloat(d.pc);   // previous close
-    if (!p || p < 100) return null;
-    const ch    = p - pc;
-    const chpct = (ch / pc * 100).toFixed(3);
-    const ts    = new Date(d.t * 1000);
-    const hh    = String(ts.getHours()).padStart(2,"0");
-    const mm    = String(ts.getMinutes()).padStart(2,"0");
+    const d   = await r.json();
+    const usd = parseFloat(d?.quote?.USD);
+    // d.quote.USD = cuántos USD vale 1 XAU = precio spot real
+    if (!usd || usd < 100) return null;
+    if (!prevClose) prevClose = usd;
+    const ch    = usd - prevClose;
+    const chpct = (ch / prevClose * 100).toFixed(3);
+    const now   = new Date();
     return {{
-      precio:     p.toFixed(2),
+      precio:     usd.toFixed(2),
       cambio:     ch.toFixed(2),
       cambio_pct: chpct,
-      high:       parseFloat(d.h || p).toFixed(2),
-      low:        parseFloat(d.l || p).toFixed(2),
-      hora:       hh + ":" + mm,
-      src:        "Finnhub"
+      high:       usd.toFixed(2),
+      low:        usd.toFixed(2),
+      hora:       String(now.getHours()).padStart(2,"0")+":"+String(now.getMinutes()).padStart(2,"0"),
+      src:        "Finnhub REST"
     }};
   }} catch(e) {{ return null; }}
 }}
 
-// ── Fuente 2: TwelveData — fallback ──────────────────────────────
+// ══════════════════════════════════════════════════════════════
+//  FUENTE 3: TwelveData REST — segundo fallback
+// ══════════════════════════════════════════════════════════════
 async function fetchTD() {{
   if (!TD_KEY) return null;
   try {{
     const r = await fetch(
       `https://api.twelvedata.com/price?symbol=XAU/USD&apikey=${{TD_KEY}}`,
-      {{signal: AbortSignal.timeout(3000)}}
+      {{signal: AbortSignal.timeout(4000)}}
     );
     if (!r.ok) return null;
     const d = await r.json();
     const p = parseFloat(d.price);
     if (!p || p < 100) return null;
-    const now = new Date();
+    if (!prevClose) prevClose = p;
+    const ch    = p - prevClose;
+    const now   = new Date();
     return {{
       precio:     p.toFixed(2),
-      cambio:     "0.00",
-      cambio_pct: "0.000",
+      cambio:     ch.toFixed(2),
+      cambio_pct: (ch/prevClose*100).toFixed(3),
       high:       p.toFixed(2),
       low:        p.toFixed(2),
       hora:       String(now.getHours()).padStart(2,"0")+":"+String(now.getMinutes()).padStart(2,"0"),
@@ -1213,36 +1288,26 @@ async function fetchTD() {{
   }} catch(e) {{ return null; }}
 }}
 
-// ── Fuente 3: Yahoo Finance proxy — último recurso ────────────────
-async function fetchYF() {{
-  try {{
-    const url = "https://query1.finance.yahoo.com/v8/finance/chart/GC%3DF?interval=1m&range=1d";
-    const r   = await fetch("https://api.allorigins.win/get?url=" + encodeURIComponent(url),
-                            {{signal: AbortSignal.timeout(5000)}});
-    const raw = await r.json();
-    const data= JSON.parse(raw.contents);
-    const q   = data.chart.result[0];
-    const closes = q.indicators.quote[0].close.filter(x=>x!=null);
-    const p   = closes[closes.length - 1];
-    const pc  = closes[closes.length - 2] || p;
-    const highs = q.indicators.quote[0].high.filter(x=>x!=null);
-    const lows  = q.indicators.quote[0].low.filter(x=>x!=null);
-    const ch  = p - pc;
-    const ts  = new Date(q.timestamp[q.timestamp.length-1]*1000);
-    return {{
-      precio:     p.toFixed(2),
-      cambio:     ch.toFixed(2),
-      cambio_pct: (ch/pc*100).toFixed(3),
-      high:       Math.max(...highs.slice(-20)).toFixed(2),
-      low:        Math.min(...lows.slice(-20)).toFixed(2),
-      hora:       String(ts.getHours()).padStart(2,"0")+":"+String(ts.getMinutes()).padStart(2,"0"),
-      src:        "yfinance"
-    }};
-  }} catch(e) {{ return null; }}
+// ══════════════════════════════════════════════════════════════
+//  LOOP REST — se usa si WebSocket no está disponible
+// ══════════════════════════════════════════════════════════════
+async function tickREST() {{
+  if (wsAlive) return;   // WS activo, no necesitamos REST
+  let data = await fetchFinnhubREST();
+  if (!data) data = await fetchTD();
+  if (data) actualizarUI(data);
 }}
 
-// ── Actualizar UI ─────────────────────────────────────────────────
-function update(tick) {{
+function iniciarREST() {{
+  if (restTimer) return;
+  restTimer = setInterval(tickREST, 2000);
+  tickREST();
+}}
+
+// ══════════════════════════════════════════════════════════════
+//  ACTUALIZAR UI
+// ══════════════════════════════════════════════════════════════
+function actualizarUI(tick) {{
   if (!tick) return;
   const up    = parseFloat(tick.cambio) >= 0;
   const color = up ? "#4CAF82" : "#C0392B";
@@ -1253,6 +1318,7 @@ function update(tick) {{
   const was = prevPrice;
   prevPrice = tick.precio;
 
+  // Flash animación en cada cambio
   if (was && was !== tick.precio) {{
     el.classList.remove("flash-up","flash-down");
     void el.offsetWidth;
@@ -1260,33 +1326,29 @@ function update(tick) {{
   }}
 
   el.style.color      = color;
-  el.style.textShadow = `0 0 14px ${{color}}88`;
+  el.style.textShadow = `0 0 16px ${{color}}99`;
   el.textContent      = "$" + parseFloat(tick.precio).toLocaleString("en-US",
                         {{minimumFractionDigits:2, maximumFractionDigits:2}});
 
   const ch = document.getElementById("cambio");
   ch.style.color = color;
-  ch.textContent = `${{flecha}} ${{Math.abs(tick.cambio)}} (${{sign}}${{tick.cambio_pct}}%)`;
+  ch.textContent = `${{flecha}} ${{Math.abs(parseFloat(tick.cambio)).toFixed(2)}} (${{sign}}${{tick.cambio_pct}}%)`;
 
   document.getElementById("hora").textContent = tick.hora;
   document.getElementById("src").textContent  = tick.src;
   document.getElementById("hl").innerHTML =
-    `H: ${{tick.high}} &nbsp; L: ${{tick.low}}<br>` +
-    `<span style="font-size:11px;letter-spacing:1px;">Finnhub live · Señales caché 5min</span>`;
+    `OANDA · XAU/USD Spot<br>` +
+    `<span style="font-size:11px;letter-spacing:1px;">${{tick.src}} · Señales caché 5min</span>`;
 
   document.getElementById("dot").style.background = color;
 }}
 
-// ── Loop principal — Finnhub → TwelveData → yfinance ─────────────
-async function tick() {{
-  let data = await fetchFinnhub();
-  if (!data) data = await fetchTD();
-  if (!data) data = await fetchYF();
-  update(data);
-}}
-
-tick();
-setInterval(tick, 2000);
+// ══════════════════════════════════════════════════════════════
+//  ARRANCAR — WebSocket primero, REST como respaldo
+// ══════════════════════════════════════════════════════════════
+conectarWS();
+// REST de respaldo si WS no conecta en 3s
+setTimeout(() => {{ if (!wsAlive) iniciarREST(); }}, 3000);
 </script>
 </body>
 </html>
