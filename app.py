@@ -75,7 +75,7 @@ def get_precio_fallback():
         except: pass
     # 3. yfinance — último recurso de emergencia
     try:
-        df_tick = yf.download("GC=F", period="1d", interval="1m", progress=False)
+        df_tick = yf.download("XAUUSD=X", period="1d", interval="1m", progress=False)
         if df_tick is not None and len(df_tick) > 1:
             df_tick.columns = [c[0] if isinstance(c, tuple) else c for c in df_tick.columns]
             return float(df_tick['Close'].iloc[-1])
@@ -159,7 +159,7 @@ def _fetch_td_series(interval_yf, outputsize=500):
 
 def _fetch_yf_fallback(interval, period):
     try:
-        df = yf.download("GC=F", period=period, interval=interval, progress=False)
+        df = yf.download("XAUUSD=X", period=period, interval=interval, progress=False)
         df.columns = [c[0] if isinstance(c,tuple) else c for c in df.columns]
         df.dropna(inplace=True)
         return df if len(df) >= 50 else None
@@ -178,7 +178,7 @@ def get_data(interval="1d", period="2y"):
     # 3. yfinance emergencia
     df = _fetch_yf_fallback(interval, period)
     if df is not None: return df
-    return _fetch_yf_fallback("1d", "2y")
+    return _fetch_yf_fallback("1d", "2y")  # XAUUSD=X spot
 
 @st.cache_data(ttl=300)  # 5 minutos
 def add_ind(df_json):
