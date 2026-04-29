@@ -73,12 +73,12 @@ def get_precio_fallback():
                 p = float(r.json().get("price", 0))
                 if p > 100: return p
         except: pass
-    # 3. yfinance — último recurso de emergencia
+    # 3. Stooq diario — precio de cierre más reciente
     try:
-        df_tick = yf.download("XAUUSD=X", period="1d", interval="1m", progress=False)
-        if df_tick is not None and len(df_tick) > 1:
-            df_tick.columns = [c[0] if isinstance(c, tuple) else c for c in df_tick.columns]
-            return float(df_tick['Close'].iloc[-1])
+        from pandas_datareader import data as pdr
+        df_s = pdr.DataReader("GC.F", "stooq")
+        if df_s is not None and len(df_s) > 0:
+            return float(df_s['Close'].iloc[0])
     except: pass
     return None
 
@@ -158,12 +158,33 @@ def _fetch_td_series(interval_yf, outputsize=500):
     except: return None
 
 def _fetch_yf_fallback(interval, period):
+    """Stooq como fallback — gratis, sin key, sin límites de rate."""
+    import datetime as _dt
     try:
-        df = yf.download("XAUUSD=X", period=period, interval=interval, progress=False)
-        df.columns = [c[0] if isinstance(c,tuple) else c for c in df.columns]
-        df.dropna(inplace=True)
-        return df if len(df) >= 50 else None
-    except: return None
+        # Stooq via pandas_datareader
+        from pandas_datareader import data as pdr
+        # Stooq solo soporta diario para metales
+        df = pdr.DataReader("GC.F", "stooq")
+        if df is not None and len(df) >= 50:
+            df = df.sort_index()
+            # Asegurar columnas correctas
+            df.columns = [c.capitalize() if c.lower() in ['open','high','low','close','volume'] 
+                         else c for c in df.columns]
+            if 'Volume' not in df.columns:
+                df['Volume'] = 0
+            df.dropna(subset=['Open','High','Low','Close'], inplace=True)
+            return df if len(df) >= 50 else None
+    except: pass
+    # Ultimo recurso: yfinance con GC=F
+    try:
+        import yfinance as _yf
+        df = _yf.download("GC=F", period=period, interval=interval, progress=False)
+        if df is not None and len(df) > 1:
+            df.columns = [c[0] if isinstance(c,tuple) else c for c in df.columns]
+            df.dropna(inplace=True)
+            return df if len(df) >= 50 else None
+    except: pass
+    return None
 
 @st.cache_data(ttl=300)
 def get_data(interval="1d", period="2y"):
@@ -178,7 +199,7 @@ def get_data(interval="1d", period="2y"):
     # 3. yfinance emergencia
     df = _fetch_yf_fallback(interval, period)
     if df is not None: return df
-    return _fetch_yf_fallback("1d", "2y")  # XAUUSD=X spot
+    return _fetch_yf_fallback("1d", "2y")
 
 @st.cache_data(ttl=300)  # 5 minutos
 def add_ind(df_json):
