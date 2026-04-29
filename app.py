@@ -36,8 +36,9 @@ try:
     GH_REPO         = st.secrets["GITHUB_REPO"]
     TWELVEDATA_KEY  = st.secrets.get("TWELVEDATA_KEY", "")
     NEWS_API_KEY    = st.secrets.get("NEWS_API_KEY", "")
+    FINNHUB_KEY     = st.secrets.get("FINNHUB_KEY", "")
 except:
-    TG_TOKEN = TG_CHAT_ID = GH_TOKEN = GH_REPO = TWELVEDATA_KEY = NEWS_API_KEY = ''
+    TG_TOKEN = TG_CHAT_ID = GH_TOKEN = GH_REPO = TWELVEDATA_KEY = NEWS_API_KEY = FINNHUB_KEY = ''
 
 # Import signal generator
 from signal_generator import build_signal, save_signal_github
@@ -47,8 +48,21 @@ from signal_generator import build_signal, save_signal_github
 #  El precio visual en pantalla lo maneja el widget JS
 # ════════════════════════════════════════════════════════════════
 def get_precio_fallback():
-    """Precio para lógica interna (paper trades, SL/TP, Telegram)"""
-    # 1. TwelveData /price — más rápido y preciso
+    """Precio para lógica interna (paper trades, SL/TP, Telegram)
+    Orden: Finnhub → TwelveData → yfinance emergencia
+    """
+    # 1. Finnhub — 60 calls/min, sin límite práctico
+    if FINNHUB_KEY:
+        try:
+            r = requests.get(
+                "https://finnhub.io/api/v1/quote",
+                params={"symbol":"OANDA:XAU_USD","token":FINNHUB_KEY},
+                timeout=4)
+            if r.status_code == 200:
+                p = float(r.json().get("c", 0))
+                if p > 100: return p
+        except: pass
+    # 2. TwelveData fallback
     if TWELVEDATA_KEY:
         try:
             r = requests.get(
@@ -59,7 +73,7 @@ def get_precio_fallback():
                 p = float(r.json().get("price", 0))
                 if p > 100: return p
         except: pass
-    # 2. yfinance 1m — último recurso
+    # 3. yfinance — último recurso de emergencia
     try:
         df_tick = yf.download("GC=F", period="1d", interval="1m", progress=False)
         if df_tick is not None and len(df_tick) > 1:
@@ -72,10 +86,65 @@ def get_precio_fallback():
 #  TWELVEDATA — Fuente principal para TODO
 #  yfinance solo como fallback de emergencia
 # ════════════════════════════════════════════════════════════════
+# Mapeo de intervalos
 TD_INTERVAL_MAP   = {"5m":"5min","15m":"15min","30m":"30min","1h":"1h","4h":"4h","1d":"1day"}
 TD_OUTPUTSIZE_MAP = {"5m":500,"15m":500,"30m":500,"1h":700,"4h":700,"1d":750}
+FH_INTERVAL_MAP   = {"5m":"5","15m":"15","30m":"30","1h":"60","4h":"D","1d":"D"}
+
+def _df_from_values(values_list):
+    """Convierte lista de dicts OHLCV a DataFrame limpio."""
+    df = pd.DataFrame(values_list)
+    if "datetime" in df.columns:
+        df["datetime"] = pd.to_datetime(df["datetime"])
+        df.set_index("datetime", inplace=True)
+    df = df.rename(columns={"open":"Open","high":"High","low":"Low","close":"Close","volume":"Volume"})
+    for col in ["Open","High","Low","Close","Volume"]:
+        if col in df.columns: df[col] = pd.to_numeric(df[col], errors="coerce")
+    if "Volume" not in df.columns: df["Volume"] = 0
+    df.dropna(subset=["Open","High","Low","Close"], inplace=True)
+    return df if len(df) >= 50 else None
+
+def _fetch_finnhub_series(interval_yf, outputsize=500):
+    """Descarga velas desde Finnhub — 60 calls/min gratis."""
+    if not FINNHUB_KEY: return None
+    # Finnhub candles usa timestamps Unix
+    import time as _time
+    resolution = FH_INTERVAL_MAP.get(interval_yf, "D")
+    # Calcular rango de tiempo según outputsize e intervalo
+    mins_map = {"5":5,"15":15,"30":30,"60":60,"D":1440}
+    mins     = mins_map.get(resolution, 1440)
+    t_to     = int(_time.time())
+    t_from   = t_to - (outputsize * mins * 60)
+    try:
+        r = requests.get(
+            "https://finnhub.io/api/v1/forex/candle",
+            params={"symbol":"OANDA:XAU_USD","resolution":resolution,
+                    "from":t_from,"to":t_to,"token":FINNHUB_KEY},
+            timeout=10)
+        if r.status_code != 200: return None
+        data = r.json()
+        if data.get("s") != "ok" or "c" not in data: return None
+        n = len(data["c"])
+        rows = []
+        for i in range(n):
+            rows.append({
+                "datetime": pd.to_datetime(data["t"][i], unit="s"),
+                "Open":  float(data["o"][i]),
+                "High":  float(data["h"][i]),
+                "Low":   float(data["l"][i]),
+                "Close": float(data["c"][i]),
+                "Volume": float(data.get("v",[0]*n)[i]) if "v" in data else 0
+            })
+        if not rows: return None
+        df = pd.DataFrame(rows)
+        df.set_index("datetime", inplace=True)
+        df.sort_index(inplace=True)
+        df.dropna(subset=["Open","High","Low","Close"], inplace=True)
+        return df if len(df) >= 50 else None
+    except: return None
 
 def _fetch_td_series(interval_yf, outputsize=500):
+    """Descarga velas desde TwelveData — fallback de Finnhub."""
     if not TWELVEDATA_KEY: return None
     td_iv = TD_INTERVAL_MAP.get(interval_yf, "1day")
     try:
@@ -85,15 +154,7 @@ def _fetch_td_series(interval_yf, outputsize=500):
         if r.status_code != 200: return None
         data = r.json()
         if data.get("status") != "ok" or "values" not in data: return None
-        df = pd.DataFrame(data["values"])
-        df["datetime"] = pd.to_datetime(df["datetime"])
-        df.set_index("datetime", inplace=True)
-        df = df.rename(columns={"open":"Open","high":"High","low":"Low","close":"Close","volume":"Volume"})
-        for col in ["Open","High","Low","Close","Volume"]:
-            if col in df.columns: df[col] = pd.to_numeric(df[col], errors="coerce")
-        if "Volume" not in df.columns: df["Volume"] = 0
-        df.dropna(subset=["Open","High","Low","Close"], inplace=True)
-        return df if len(df) >= 50 else None
+        return _df_from_values(data["values"])
     except: return None
 
 def _fetch_yf_fallback(interval, period):
@@ -106,9 +167,15 @@ def _fetch_yf_fallback(interval, period):
 
 @st.cache_data(ttl=300)
 def get_data(interval="1d", period="2y"):
+    """Datos OHLCV — Finnhub primero, TwelveData segundo, yfinance emergencia."""
     outputsize = TD_OUTPUTSIZE_MAP.get(interval, 500)
+    # 1. Finnhub
+    df = _fetch_finnhub_series(interval, outputsize)
+    if df is not None: return df
+    # 2. TwelveData
     df = _fetch_td_series(interval, outputsize)
     if df is not None: return df
+    # 3. yfinance emergencia
     df = _fetch_yf_fallback(interval, period)
     if df is not None: return df
     return _fetch_yf_fallback("1d", "2y")
@@ -166,8 +233,9 @@ def mtf_conf():
     tf_list = [("D1","1d",700),("H4","4h",600),("H1","1h",600),("M15","15m",500)]
     for name, iv, osz in tf_list:
         try:
-            # TwelveData primero
-            df = _fetch_td_series(iv, osz)
+            # Finnhub primero, luego TwelveData, luego yfinance
+            df = _fetch_finnhub_series(iv, osz)
+            if df is None: df = _fetch_td_series(iv, osz)
             # Fallback yfinance
             if df is None:
                 period_map = {"1d":"2y","4h":"180d","1h":"60d","15m":"10d"}
@@ -783,7 +851,12 @@ with st.sidebar:
     st.markdown(f'<div style="font-family:Cinzel,serif;color:{T["primary"]}99;font-size:.8em;letter-spacing:2px;">📱 TELEGRAM</div>', unsafe_allow_html=True)
     st.caption("entré · no · salgo · estado · señal · wyckoff · me quedo")
     st.markdown("---")
-    fuente_txt = "🟢 TwelveData — precio + datos + señales" if TWELVEDATA_KEY else "⚠️ Agrega TWELVEDATA_KEY en Secrets para datos precisos"
+    if FINNHUB_KEY:
+        fuente_txt = "🟢 Finnhub — precio + datos + señales"
+    elif TWELVEDATA_KEY:
+        fuente_txt = "🟡 TwelveData (activo como fallback)"
+    else:
+        fuente_txt = "⚠️ Agrega FINNHUB_KEY en Secrets"
     st.caption(fuente_txt)
     st.markdown("---")
     st.markdown(f'<div style="font-family:Cinzel,serif;color:{T["primary"]}99;font-size:.8em;letter-spacing:2px;">📚 GUÍA</div>', unsafe_allow_html=True)
@@ -964,6 +1037,7 @@ st.markdown(f"""
 #  WIDGET JS — PRECIO EN VIVO SIN RECARGAR STREAMLIT
 #  Llama a TwelveData directo desde el navegador cada 2s
 # ════════════════════════════════════════════════════════════════
+_fh_key   = FINNHUB_KEY or ""
 _td_key   = TWELVEDATA_KEY or ""
 _primary  = T['primary']
 _card     = T['card']
@@ -1059,61 +1133,94 @@ components.html(f"""
 </div>
 
 <script>
+const FH_KEY = "{_fh_key}";
 const TD_KEY = "{_td_key}";
 let prevPrice = null;
 
-async function fetchTD() {{
+// ── Fuente 1: Finnhub — 60 calls/min, sin límite práctico ────────
+async function fetchFinnhub() {{
+  if (!FH_KEY) return null;
   try {{
-    const r  = await fetch(`https://api.twelvedata.com/quote?symbol=XAU/USD&apikey=${{TD_KEY}}`, {{signal: AbortSignal.timeout(3000)}});
+    const r = await fetch(
+      `https://finnhub.io/api/v1/quote?symbol=OANDA:XAU_USD&token=${{FH_KEY}}`,
+      {{signal: AbortSignal.timeout(3000)}}
+    );
+    if (!r.ok) return null;
     const d  = await r.json();
-    const p  = parseFloat(d.close);
-    const pc = parseFloat(d.previous_close || p);
-    if (!p || p < 100) throw new Error("bad data");
+    const p  = parseFloat(d.c);    // current price
+    const pc = parseFloat(d.pc);   // previous close
+    if (!p || p < 100) return null;
     const ch    = p - pc;
     const chpct = (ch / pc * 100).toFixed(3);
-    const time  = (d.datetime || "").slice(11,16);
+    const ts    = new Date(d.t * 1000);
+    const hh    = String(ts.getHours()).padStart(2,"0");
+    const mm    = String(ts.getMinutes()).padStart(2,"0");
     return {{
-      precio: p.toFixed(2),
-      cambio: ch.toFixed(2),
+      precio:     p.toFixed(2),
+      cambio:     ch.toFixed(2),
       cambio_pct: chpct,
-      high:   parseFloat(d.high  || p).toFixed(2),
-      low:    parseFloat(d.low   || p).toFixed(2),
-      hora:   time,
-      src:    "TwelveData"
+      high:       parseFloat(d.h || p).toFixed(2),
+      low:        parseFloat(d.l || p).toFixed(2),
+      hora:       hh + ":" + mm,
+      src:        "Finnhub"
     }};
   }} catch(e) {{ return null; }}
 }}
 
+// ── Fuente 2: TwelveData — fallback ──────────────────────────────
+async function fetchTD() {{
+  if (!TD_KEY) return null;
+  try {{
+    const r = await fetch(
+      `https://api.twelvedata.com/price?symbol=XAU/USD&apikey=${{TD_KEY}}`,
+      {{signal: AbortSignal.timeout(3000)}}
+    );
+    if (!r.ok) return null;
+    const d = await r.json();
+    const p = parseFloat(d.price);
+    if (!p || p < 100) return null;
+    const now = new Date();
+    return {{
+      precio:     p.toFixed(2),
+      cambio:     "0.00",
+      cambio_pct: "0.000",
+      high:       p.toFixed(2),
+      low:        p.toFixed(2),
+      hora:       String(now.getHours()).padStart(2,"0")+":"+String(now.getMinutes()).padStart(2,"0"),
+      src:        "TwelveData"
+    }};
+  }} catch(e) {{ return null; }}
+}}
+
+// ── Fuente 3: Yahoo Finance proxy — último recurso ────────────────
 async function fetchYF() {{
-  // Fallback: yfinance proxy via allorigins
   try {{
     const url = "https://query1.finance.yahoo.com/v8/finance/chart/GC%3DF?interval=1m&range=1d";
-    const r   = await fetch("https://api.allorigins.win/get?url=" + encodeURIComponent(url), {{signal: AbortSignal.timeout(4000)}});
+    const r   = await fetch("https://api.allorigins.win/get?url=" + encodeURIComponent(url),
+                            {{signal: AbortSignal.timeout(5000)}});
     const raw = await r.json();
     const data= JSON.parse(raw.contents);
     const q   = data.chart.result[0];
     const closes = q.indicators.quote[0].close.filter(x=>x!=null);
     const p   = closes[closes.length - 1];
     const pc  = closes[closes.length - 2] || p;
-    const highs  = q.indicators.quote[0].high.filter(x=>x!=null);
-    const lows   = q.indicators.quote[0].low.filter(x=>x!=null);
+    const highs = q.indicators.quote[0].high.filter(x=>x!=null);
+    const lows  = q.indicators.quote[0].low.filter(x=>x!=null);
     const ch  = p - pc;
-    const ts  = q.timestamp[q.timestamp.length-1];
-    const t   = new Date(ts*1000);
-    const hh  = String(t.getHours()).padStart(2,"0");
-    const mm  = String(t.getMinutes()).padStart(2,"0");
+    const ts  = new Date(q.timestamp[q.timestamp.length-1]*1000);
     return {{
-      precio: p.toFixed(2),
-      cambio: ch.toFixed(2),
+      precio:     p.toFixed(2),
+      cambio:     ch.toFixed(2),
       cambio_pct: (ch/pc*100).toFixed(3),
-      high:   Math.max(...highs.slice(-20)).toFixed(2),
-      low:    Math.min(...lows.slice(-20)).toFixed(2),
-      hora:   hh+":"+mm,
-      src:    "yfinance"
+      high:       Math.max(...highs.slice(-20)).toFixed(2),
+      low:        Math.min(...lows.slice(-20)).toFixed(2),
+      hora:       String(ts.getHours()).padStart(2,"0")+":"+String(ts.getMinutes()).padStart(2,"0"),
+      src:        "yfinance"
     }};
   }} catch(e) {{ return null; }}
 }}
 
+// ── Actualizar UI ─────────────────────────────────────────────────
 function update(tick) {{
   if (!tick) return;
   const up    = parseFloat(tick.cambio) >= 0;
@@ -1121,11 +1228,10 @@ function update(tick) {{
   const flecha= up ? "▲" : "▼";
   const sign  = up ? "+" : "";
 
-  const el = document.getElementById("precio");
+  const el  = document.getElementById("precio");
   const was = prevPrice;
   prevPrice = tick.precio;
 
-  // Flash animation on change
   if (was && was !== tick.precio) {{
     el.classList.remove("flash-up","flash-down");
     void el.offsetWidth;
@@ -1134,7 +1240,8 @@ function update(tick) {{
 
   el.style.color      = color;
   el.style.textShadow = `0 0 14px ${{color}}88`;
-  el.textContent      = "$" + parseFloat(tick.precio).toLocaleString("en-US", {{minimumFractionDigits:2, maximumFractionDigits:2}});
+  el.textContent      = "$" + parseFloat(tick.precio).toLocaleString("en-US",
+                        {{minimumFractionDigits:2, maximumFractionDigits:2}});
 
   const ch = document.getElementById("cambio");
   ch.style.color = color;
@@ -1142,15 +1249,17 @@ function update(tick) {{
 
   document.getElementById("hora").textContent = tick.hora;
   document.getElementById("src").textContent  = tick.src;
-  document.getElementById("hl").innerHTML     =
-    `H: ${{tick.high}} &nbsp; L: ${{tick.low}}<br><span style="font-size:11px;letter-spacing:1px;">Precio live JS · Modelo caché 10min</span>`;
+  document.getElementById("hl").innerHTML =
+    `H: ${{tick.high}} &nbsp; L: ${{tick.low}}<br>` +
+    `<span style="font-size:11px;letter-spacing:1px;">Finnhub live · Señales caché 5min</span>`;
 
-  // Dot color
   document.getElementById("dot").style.background = color;
 }}
 
+// ── Loop principal — Finnhub → TwelveData → yfinance ─────────────
 async function tick() {{
-  let data = TD_KEY ? await fetchTD() : null;
+  let data = await fetchFinnhub();
+  if (!data) data = await fetchTD();
   if (!data) data = await fetchYF();
   update(data);
 }}
