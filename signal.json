@@ -1,12 +1,12 @@
 {
-  "id": "20260430003153",
+  "id": "20260430031356",
   "symbol": "XAUUSD",
-  "action": "SELL",
-  "entry": 4562.46,
-  "sl": 4566.05,
-  "tp": 4549.4,
-  "confidence": 66.77,
-  "smc_bias": "ALCISTA",
-  "wyckoff_trend": "RANGO",
-  "timestamp": "2026-04-30T00:31:53.837463+00:00"
+  "action": "BUY",
+  "entry": 4566.84,
+  "sl": 4559.88,
+  "tp": 4567.93,
+  "confidence": 84.06,
+  "smc_bias": "BAJISTA",
+  "wyckoff_trend": "ALCISTA",
+  "timestamp": "2026-04-30T03:13:56.040782+00:00"
 }
