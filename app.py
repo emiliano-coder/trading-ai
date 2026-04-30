@@ -1380,45 +1380,134 @@ tab1,tab2,tab3,tab4,tab5,tab6,tab7,tab8,tab9,tab10,tab11 = st.tabs([
 with tab1:
     ca, cb = st.columns(2)
     with ca:
+        # ── ESTADO DE ENTRADA ─────────────────────────────────────
+        sl_r          = sl_long if pred >= 0 else sl_short
+        tp_r          = tp_long if pred >= 0 else tp_short
+        precio_señal  = float(df['Close'].iloc[-1])   # precio cuando se generó la señal
+        dist_entrada  = abs(precio - precio_señal)
+        zona_valida   = dist_entrada <= atr * 1.0
+
+        sl_tocado = pred != 0 and ((pred == 1 and precio <= sl_r) or (pred == -1 and precio >= sl_r))
+        tp_tocado = pred != 0 and ((pred == 1 and precio >= tp_r) or (pred == -1 and precio <= tp_r))
+
+        if pred == 0:
+            estado  = "ESPERA";      ec = T['primary']
+            elabel  = "⏳  ESPERA";  esub = "Sin dirección clara — no operes aún"
+        elif sl_tocado:
+            estado  = "SL";          ec = "#C0392B"
+            elabel  = "🚨  SL TOCADO"; esub = "Stop Loss alcanzado — señal cancelada, espera la siguiente"
+        elif tp_tocado:
+            estado  = "TP";          ec = "#4CAF82"
+            elabel  = "🎯  TP ALCANZADO"; esub = "Objetivo alcanzado — señal completada con éxito"
+        elif zona_valida:
+            estado  = "ENTRA_YA";    ec = "#4CAF82"
+            elabel  = "⚡  ENTRA YA"; esub = f"Precio en zona válida · diferencia: ${dist_entrada:.2f} (< 1×ATR)"
+        else:
+            estado  = "AQUI_ENTRAS"; ec = "#C8A96E"
+            elabel  = "🎯  AQUÍ ENTRAS"
+            dir_txt = "baje" if pred == 1 else "suba"
+            esub    = f"Espera que el precio {dir_txt} a ${precio_señal:,.2f} ± ${atr:.2f}"
+
         st.markdown('<div class="card"><div class="card-title">SEÑAL DEL ORÁCULO</div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="{"sig-long" if pred==1 else "sig-short" if pred==-1 else "sig-neu"}">{ET.get(pred)}</div>', unsafe_allow_html=True)
+
+        # Dirección
+        st.markdown(
+            f'<div class="{"sig-long" if pred==1 else "sig-short" if pred==-1 else "sig-neu"}">'
+            f'{ET.get(pred)}</div>',
+            unsafe_allow_html=True)
+
+        # Badge de estado — el más importante visualmente
+        st.markdown(f"""
+<div style="margin:10px 0 14px 0;padding:13px 16px;border-radius:4px;
+            border:2px solid {ec}88;background:{ec}14;font-family:'Cinzel',serif;">
+  <div style="font-size:1.25em;font-weight:900;color:{ec};letter-spacing:3px;">{elabel}</div>
+  <div style="font-size:.76em;color:{ec}CC;margin-top:5px;letter-spacing:1px;">{esub}</div>
+</div>""", unsafe_allow_html=True)
+
+        # Barra SL → Precio → TP
+        if pred != 0 and not sl_tocado and not tp_tocado:
+            rango = abs(tp_r - sl_r)
+            if rango > 0:
+                pos_pct = max(0, min(100,
+                    (precio - sl_r) / rango * 100 if pred == 1
+                    else (sl_r - precio) / rango * 100))
+                bc = '#4CAF82' if pos_pct > 55 else '#C8A96E' if pos_pct > 25 else '#C0392B'
+                st.markdown(f"""
+<div style="margin:6px 0 14px 0;">
+  <div style="display:flex;justify-content:space-between;
+              font-size:.72em;color:{T['primary']}88;margin-bottom:5px;">
+    <span>🔴 SL ${sl_r:,.0f}</span>
+    <span style="color:{bc};font-weight:700;">📍 ${precio:,.2f}</span>
+    <span>🟢 TP ${tp_r:,.0f}</span>
+  </div>
+  <div style="background:{T['card']};border-radius:4px;height:9px;
+              border:1px solid {T['primary']}33;overflow:hidden;">
+    <div style="width:{pos_pct:.1f}%;height:100%;border-radius:4px;
+                background:linear-gradient(90deg,#C0392B 0%,{bc} 100%);
+                transition:width .5s ease;">
+    </div>
+  </div>
+  <div style="text-align:center;font-size:.68em;
+              color:{T['primary']}55;margin-top:3px;">
+    Posición en rango SL→TP: {pos_pct:.1f}%
+  </div>
+</div>""", unsafe_allow_html=True)
+
+        # Extras Gladiador / Wyckoff
         if 'Gladiador' in st.session_state.modo and smc.get('gladiador_entry'):
             ge_label = smc['gladiador_entry'].replace('_',' ')
             ge_color = '#4CAF82' if 'LONG' in smc['gladiador_entry'] else '#C0392B'
-            st.markdown(f'<span style="font-family:Cinzel,serif;font-size:.8em;color:{ge_color};letter-spacing:2px;">⚔️ MICRO: {ge_label}</span>', unsafe_allow_html=True)
+            st.markdown(
+                f'<span style="font-family:Cinzel,serif;font-size:.8em;'
+                f'color:{ge_color};letter-spacing:2px;">⚔️ MICRO: {ge_label}</span>',
+                unsafe_allow_html=True)
         if wyckoff.get('active'):
             wa = wyckoff['active']
-            wa_color = '#4CAF82' if wa['tipo']=='LONG' else '#C0392B'
-            st.markdown(f'<span style="font-family:Cinzel,serif;font-size:.8em;color:{wa_color};letter-spacing:2px;">🏺 WYCKOFF: {wa["tipo"]} @ ${wa["entrada"]:,.2f} | SL: ${wa["sl"]:,.2f}</span>', unsafe_allow_html=True)
-        sl_r = sl_long if pred>=0 else sl_short
-        tp_r = tp_long if pred>=0 else tp_short
-        st.markdown(f"**Modo:** {st.session_state.modo}  |  **Precio:** ${precio:,.2f}")
-        if pred!=0:
+            wa_color = '#4CAF82' if wa['tipo'] == 'LONG' else '#C0392B'
+            st.markdown(
+                f'<span style="font-family:Cinzel,serif;font-size:.8em;'
+                f'color:{wa_color};letter-spacing:2px;">'
+                f'🏺 WYCKOFF: {wa["tipo"]} @ ${wa["entrada"]:,.2f}</span>',
+                unsafe_allow_html=True)
+
+        st.markdown(f"**Modo:** {st.session_state.modo}")
+        if pred != 0:
+            st.markdown(f"**Precio señal:** ${precio_señal:,.2f}  |  **Actual:** ${precio:,.2f}")
             st.markdown(f"**Stop Loss 🔴:** ${sl_r:,.2f}")
             st.markdown(f"**Take Profit 🟢:** ${tp_r:,.2f}")
         else:
             st.markdown(f"▲ LONG si rompe ${bb_up:,.2f}")
             st.markdown(f"▼ SHORT si rompe ${bb_low:,.2f}")
-        lot, risg = calc_pos(st.session_state.capital, risk_pct, precio, sl_r if sl_r else precio-atr)
+
+        lot, risg = calc_pos(st.session_state.capital, risk_pct, precio, sl_r if sl_r else precio - atr)
         st.markdown(f"**Lotes:** {lot}  |  **Riesgo:** ${risg:.2f}  |  **R:R:** 1:{rr}")
         st.markdown('</div>', unsafe_allow_html=True)
 
+        # Botones — deshabilitados si SL/TP/ESPERA
+        btn_off = estado in ['SL', 'TP', 'ESPERA']
+        btn_txt = "⚡ ENTRA YA" if estado == 'ENTRA_YA' else "🎯 REGISTRAR ENTRADA"
         c_si, c_no = st.columns(2)
-        if c_si.button("✅ ENTRO", use_container_width=True):
-            ot = [t for t in st.session_state.paper_trades if t['estado']=='ABIERTO']
+        if c_si.button(btn_txt, use_container_width=True, disabled=btn_off):
+            ot = [t for t in st.session_state.paper_trades if t['estado'] == 'ABIERTO']
             if not ot:
                 dir_str     = 'LONG 📈' if pred==1 else 'SHORT 📉' if pred==-1 else ('LONG 📈' if smc.get('gladiador_entry','').startswith('LONG') else 'SHORT 📉')
-                actual_pred = pred if pred!=0 else (1 if 'LONG' in dir_str else -1)
-                sl_r2 = sl_long if actual_pred==1 else sl_short
-                tp_r2 = tp_long if actual_pred==1 else tp_short
+                actual_pred = pred if pred != 0 else (1 if 'LONG' in dir_str else -1)
+                sl_r2 = sl_long if actual_pred == 1 else sl_short
+                tp_r2 = tp_long if actual_pred == 1 else tp_short
                 lot2, risg2 = calc_pos(st.session_state.capital, risk_pct, precio, sl_r2)
                 st.session_state.paper_trades.append({
-                    'id':len(st.session_state.paper_trades)+1,'dir':dir_str,
-                    'entrada':precio,'sl':sl_r2,'tp':tp_r2,'lotes':lot2,'riesgo':risg2,
-                    'estado':'ABIERTO','fecha':ahora.strftime('%d/%m %H:%M'),'resultado':'PENDIENTE','pnl':0})
-                send_tg(f"🏛️ *Trade abierto — {st.session_state.modo}*\n{dir_str} @ ${precio:,.2f}\nSL: ${sl_r2:,.2f} | TP: ${tp_r2:,.2f}\nLotes: {lot2}")
-                gh_save({**sv2,'paper_trades':st.session_state.paper_trades}); st.success("Trade registrado ✅"); st.rerun()
-            else: st.warning("Ya tienes un trade abierto.")
+                    'id': len(st.session_state.paper_trades)+1, 'dir': dir_str,
+                    'entrada': precio, 'sl': sl_r2, 'tp': tp_r2,
+                    'lotes': lot2, 'riesgo': risg2, 'estado': 'ABIERTO',
+                    'fecha': ahora.strftime('%d/%m %H:%M'), 'resultado': 'PENDIENTE', 'pnl': 0})
+                send_tg(
+                    f"🏛️ *Trade abierto — {st.session_state.modo}*\n"
+                    f"{dir_str} @ ${precio:,.2f}\n"
+                    f"SL: ${sl_r2:,.2f} | TP: ${tp_r2:,.2f}\nLotes: {lot2}")
+                gh_save({**sv2, 'paper_trades': st.session_state.paper_trades})
+                st.success("Trade registrado ✅"); st.rerun()
+            else:
+                st.warning("Ya tienes un trade abierto.")
         if c_no.button("❌ NO ENTRO", use_container_width=True):
             send_tg(f"🏛️ Rechazado: {ET.get(pred)} @ ${precio:,.2f}"); st.info("Rechazada")
 
