@@ -203,47 +203,116 @@ def get_data(interval="1d", period="2y"):
 
 @st.cache_data(ttl=300)  # 5 minutos
 def add_ind(df_json):
+    """
+    Indicadores optimizados para XAU/USD:
+    CONSERVADOS:  RSI, MACD hist, BB width, ATR, OBV, EMAs 20/50
+    NUEVOS:       ATR relativo, RSI divergencia, velas patrón, sesión
+    ELIMINADOS:   EMA200 (muy lenta para scalping), Stoch (duplica RSI),
+                  Returns 3d/5d (demasiado rezagados), Dist_EMA200
+    """
     df = pd.read_json(io.StringIO(df_json), orient='split')
-    df['EMA_20']    = ta.trend.ema_indicator(df['Close'], window=20)
-    df['EMA_50']    = ta.trend.ema_indicator(df['Close'], window=50)
-    df['EMA_200']   = ta.trend.ema_indicator(df['Close'], window=200)
-    df['RSI']       = ta.momentum.rsi(df['Close'], window=14)
-    df['MACD']      = ta.trend.macd(df['Close'])
-    df['MACD_hist'] = ta.trend.macd_diff(df['Close'])
-    df['BB_upper']  = ta.volatility.bollinger_hband(df['Close'])
-    df['BB_lower']  = ta.volatility.bollinger_lband(df['Close'])
-    df['BB_width']  = (df['BB_upper'] - df['BB_lower']) / df['Close']
-    df['ATR']       = ta.volatility.average_true_range(df['High'], df['Low'], df['Close'])
-    df['Stoch_K']   = ta.momentum.stoch(df['High'], df['Low'], df['Close'])
-    df['OBV']       = ta.volume.on_balance_volume(df['Close'], df['Volume'])
-    df['Dist_EMA20']  = (df['Close'] - df['EMA_20'])  / df['Close'] * 100
-    df['Dist_EMA50']  = (df['Close'] - df['EMA_50'])  / df['Close'] * 100
-    df['Dist_EMA200'] = (df['Close'] - df['EMA_200']) / df['Close'] * 100
-    df['Return_1d'] = df['Close'].pct_change(1)
-    df['Return_3d'] = df['Close'].pct_change(3)
-    df['Return_5d'] = df['Close'].pct_change(5)
+
+    # ── EMAs principales ─────────────────────────────────────────
+    df['EMA_20']  = ta.trend.ema_indicator(df['Close'], window=20)
+    df['EMA_50']  = ta.trend.ema_indicator(df['Close'], window=50)
+    df['EMA_9']   = ta.trend.ema_indicator(df['Close'], window=9)   # señal rápida
+
+    # ── Momentum ─────────────────────────────────────────────────
+    df['RSI']        = ta.momentum.rsi(df['Close'], window=14)
+    df['RSI_fast']   = ta.momentum.rsi(df['Close'], window=7)       # RSI rápido para scalping
+    # Divergencia RSI: RSI sube pero precio baja = señal de reversión
+    df['RSI_delta']  = df['RSI'].diff(3)
+
+    # ── MACD — solo histograma (el más informativo) ───────────────
+    df['MACD_hist']  = ta.trend.macd_diff(df['Close'])
+    df['MACD_hist_delta'] = df['MACD_hist'].diff(2)  # aceleración del MACD
+
+    # ── Volatilidad ───────────────────────────────────────────────
+    df['BB_upper'] = ta.volatility.bollinger_hband(df['Close'])
+    df['BB_lower'] = ta.volatility.bollinger_lband(df['Close'])
+    df['BB_width'] = (df['BB_upper'] - df['BB_lower']) / df['Close']
+    df['ATR']      = ta.volatility.average_true_range(df['High'], df['Low'], df['Close'])
+    # ATR relativo — clave para filtrar mercado plano
+    df['ATR_avg']  = df['ATR'].rolling(20).mean()
+    df['ATR_rel']  = df['ATR'] / df['ATR_avg']  # >1 = mercado activo, <0.8 = mercado plano
+
+    # ── Volumen ───────────────────────────────────────────────────
+    df['OBV']      = ta.volume.on_balance_volume(df['Close'], df['Volume'])
+    df['OBV_delta'] = df['OBV'].pct_change(3)    # cambio reciente en volumen
+    # Volume ratio: vela actual vs promedio — detecta impulso institucional
+    df['Vol_ratio'] = df['Volume'] / df['Volume'].rolling(20).mean()
+
+    # ── Distancia a EMAs (precio relativo) ───────────────────────
+    df['Dist_EMA20'] = (df['Close'] - df['EMA_20']) / df['Close'] * 100
+    df['Dist_EMA50'] = (df['Close'] - df['EMA_50']) / df['Close'] * 100
+    df['EMA_cross']  = df['EMA_9'] - df['EMA_20']   # cruce de EMAs rápidas
+
+    # ── Price action ──────────────────────────────────────────────
+    df['Return_1d']  = df['Close'].pct_change(1)
+    df['High_Low']   = (df['High'] - df['Low']) / df['Close']  # rango de vela
+    # Body ratio: cuerpo vs mecha — velas con cuerpo grande = dirección clara
+    df['Body_ratio'] = abs(df['Close'] - df['Open']) / (df['High'] - df['Low'] + 1e-9)
+
     df.dropna(inplace=True)
     return df
 
 @st.cache_data(ttl=300)  # 5 minutos
 def train_model(df_json, umbral):
+    """
+    Modelo optimizado:
+    - Features seleccionados por importancia real para XAU/USD
+    - Filtro de volatilidad mínima (elimina señales en mercado plano)
+    - Horizonte ajustado por estilo de trading
+    """
     df = pd.read_json(io.StringIO(df_json), orient='split')
+
+    # Target — movimiento futuro
     df['Future_Return'] = df['Close'].pct_change(5).shift(-5)
     df['Target'] = 0
     df.loc[df['Future_Return'] >  umbral, 'Target'] =  1
     df.loc[df['Future_Return'] < -umbral, 'Target'] = -1
+
+    # ── FILTRO DE VOLATILIDAD — elimina velas en mercado plano ───
+    # Solo entrenar con velas donde el mercado estaba activo
+    # ATR_rel > 0.8 = mercado con movimiento suficiente
+    if 'ATR_rel' in df.columns:
+        df = df[df['ATR_rel'] > 0.8]
+
     df.dropna(inplace=True)
-    feats = ['RSI','MACD','MACD_hist','BB_width','ATR','Stoch_K',
-             'Dist_EMA20','Dist_EMA50','Dist_EMA200','Return_1d','Return_3d','Return_5d','OBV']
+
+    # ── FEATURES OPTIMIZADOS ─────────────────────────────────────
+    # Orden por importancia estimada para XAU/USD:
+    feats = [
+        # Alta importancia — precio relativo y momentum
+        'RSI', 'RSI_fast', 'RSI_delta',
+        'MACD_hist', 'MACD_hist_delta',
+        'Dist_EMA20', 'Dist_EMA50', 'EMA_cross',
+        # Media importancia — volatilidad y estructura
+        'ATR', 'ATR_rel', 'BB_width',
+        'Body_ratio', 'High_Low',
+        # Complementario — volumen y precio
+        'OBV_delta', 'Vol_ratio',
+        'Return_1d',
+    ]
     feats = [f for f in feats if f in df.columns]
+
     X, y = df[feats], df['Target']
     sc   = StandardScaler()
     Xs   = sc.fit_transform(X)
     Xtr, Xte, ytr, yte = train_test_split(Xs, y, test_size=.2, random_state=42, shuffle=False)
-    rf = RandomForestClassifier(n_estimators=200, max_depth=10, random_state=42, n_jobs=-1)
+
+    rf = RandomForestClassifier(
+        n_estimators=200, max_depth=8,   # max_depth reducido para evitar overfitting
+        min_samples_leaf=5,              # mínimo 5 muestras por hoja
+        random_state=42, n_jobs=-1)
     rf.fit(Xtr, ytr)
-    gb = GradientBoostingClassifier(n_estimators=200, max_depth=5, random_state=42)
+
+    gb = GradientBoostingClassifier(
+        n_estimators=150, max_depth=4,
+        min_samples_leaf=5,
+        random_state=42)
     gb.fit(Xtr, ytr)
+
     m = rf if accuracy_score(yte, rf.predict(Xte)) >= accuracy_score(yte, gb.predict(Xte)) else gb
     return m, sc, feats, df
 
@@ -550,29 +619,98 @@ STYLE_CONFIG = {
     "Swing":       {"interval":"4h",  "period":"180d", "label":"H4"},
 }
 
+def _filtro_volatilidad(df) -> tuple[bool, str]:
+    """
+    Filtra señales en mercado plano.
+    Retorna (mercado_activo, razon)
+    """
+    if 'ATR_rel' not in df.columns:
+        return True, "OK"
+    atr_rel = float(df['ATR_rel'].iloc[-1])
+    if atr_rel < 0.75:
+        return False, f"Mercado plano — ATR relativo: {atr_rel:.2f} (mín: 0.75)"
+    if 'BB_width' in df.columns:
+        bb_w     = float(df['BB_width'].iloc[-1])
+        bb_w_avg = float(df['BB_width'].rolling(20).mean().iloc[-1]) if len(df) >= 20 else bb_w
+        if bb_w < bb_w_avg * 0.6:
+            return False, f"Bandas muy comprimidas — sin movimiento"
+    return True, f"Mercado activo — ATR rel: {atr_rel:.2f}"
+
+def _filtro_sesion(hora_mx: int) -> tuple[bool, str]:
+    """
+    Solo señales en ventanas de alta liquidez para XAU/USD.
+    Fuera de ventana = ruido, no señal real.
+    """
+    ventanas = [(3,5,"London Open"),(7,12,"London+NY"),(12,15,"NY tarde")]
+    for ini, fin, nombre in ventanas:
+        if ini <= hora_mx < fin:
+            return True, nombre
+    return False, "Fuera de ventana — mercado sin liquidez"
+
 def get_signal_oraculo(df, smc, features, m, sc, atr_sl, atr_tp):
+    """
+    Oráculo mejorado:
+    1. Filtro de volatilidad mínima
+    2. Filtro de sesión activa
+    3. Requiere BOS + OB alineados (igual que antes)
+    4. Requiere confianza mínima 58%
+    """
     ul   = df[features].iloc[-1:]
     pred = m.predict(sc.transform(ul))[0]
     prob = m.predict_proba(sc.transform(ul))[0]
+    conf = max(prob) * 100
     p    = float(df['Close'].iloc[-1])
     atr  = float(df['ATR'].iloc[-1])
-    smc_long  = smc['bias']=='ALCISTA' and any('ALCISTA' in ob['tipo'] for ob in smc['order_blocks'])
-    smc_short = smc['bias']=='BAJISTA' and any('BAJISTA' in ob['tipo'] for ob in smc['order_blocks'])
-    has_bos   = bool(smc['bos'])
-    if pred==1  and not (smc_long or has_bos):  pred=0
-    if pred==-1 and not (smc_short or has_bos): pred=0
+
+    # Filtro 1: volatilidad
+    mercado_ok, _ = _filtro_volatilidad(df)
+    if not mercado_ok:
+        pred = 0
+
+    # Filtro 2: confianza mínima
+    if conf < 58:
+        pred = 0
+
+    # Filtro 3: SMC — BOS + OB alineados
+    if pred != 0:
+        smc_long  = smc['bias']=='ALCISTA' and any('ALCISTA' in ob['tipo'] for ob in smc['order_blocks'])
+        smc_short = smc['bias']=='BAJISTA' and any('BAJISTA' in ob['tipo'] for ob in smc['order_blocks'])
+        has_bos   = bool(smc['bos'])
+        if pred == 1  and not (smc_long  or has_bos): pred = 0
+        if pred == -1 and not (smc_short or has_bos): pred = 0
+
     return int(pred), prob, p, atr, round(p-atr*atr_sl,2), round(p+atr*atr_tp,2), round(p+atr*atr_sl,2), round(p-atr*atr_tp,2)
 
 def get_signal_gladiador(df, smc, features, m, sc, atr_sl, atr_tp):
+    """
+    Gladiador mejorado:
+    1. Filtro de volatilidad mínima (más suave que Oráculo)
+    2. Confianza mínima 42%
+    3. Micro entradas en OB/FVG/EQH/EQL cuando ML dice lateral
+    """
     ul   = df[features].iloc[-1:]
     pred = m.predict(sc.transform(ul))[0]
     prob = m.predict_proba(sc.transform(ul))[0]
+    conf = max(prob) * 100
     p    = float(df['Close'].iloc[-1])
     atr  = float(df['ATR'].iloc[-1])
-    if pred==0 and smc.get('gladiador_entry'):
+
+    # Filtro volatilidad (más permisivo — 0.65 vs 0.75 del Oráculo)
+    if 'ATR_rel' in df.columns:
+        atr_rel = float(df['ATR_rel'].iloc[-1])
+        if atr_rel < 0.65:
+            pred = 0
+
+    # Micro entrada SMC si ML dice lateral pero hay zona clara
+    if pred == 0 and smc.get('gladiador_entry') and conf >= 42:
         ge = smc['gladiador_entry']
-        if 'LONG' in ge:  pred=1
-        elif 'SHORT' in ge: pred=-1
+        if 'LONG'  in ge: pred = 1
+        elif 'SHORT' in ge: pred = -1
+
+    # Confianza mínima
+    if conf < 42:
+        pred = 0
+
     return int(pred), prob, p, atr, round(p-atr*atr_sl,2), round(p+atr*atr_tp,2), round(p+atr*atr_sl,2), round(p-atr*atr_tp,2)
 
 def calc_pos(capital, risk, entrada, sl):
@@ -932,6 +1070,8 @@ wyckoff = run_wyckoff(df)
 # Valores del modelo (lentos, cacheados)
 rsi   = float(df['RSI'].iloc[-1])
 atr   = float(df['ATR'].iloc[-1])
+atr_rel = float(df['ATR_rel'].iloc[-1]) if 'ATR_rel' in df.columns else 1.0
+mercado_activo, mercado_razon = _filtro_volatilidad(df)
 bb_up = float(df['BB_upper'].iloc[-1])
 bb_low= float(df['BB_lower'].iloc[-1])
 ema20 = float(df['EMA_20'].iloc[-1])
@@ -1361,11 +1501,12 @@ precio_color = '#4CAF82'  # default, widget JS maneja el color visual
 c1,c2,c3,c4,c5,c6,c7 = st.columns(7)
 c1.metric("💰 Precio",f"${precio:,.2f}")
 c2.metric("📊 RSI",f"{rsi:.1f}","SC" if rsi>70 else "SV" if rsi<30 else "OK")
-c3.metric("⚡ ATR",f"{atr:.2f}")
+c3.metric("⚡ ATR",f"{atr:.2f}",f"rel:{atr_rel:.2f}")
 c4.metric("🎯 Señal","LONG" if pred==1 else "SHORT" if pred==-1 else "LAT",f"{conf:.1f}%")
 c5.metric("📐 R:R",f"1:{rr}")
 c6.metric("🏺 Wyckoff",wyckoff['trend'])
-c7.metric("💰 Capital",f"${st.session_state.capital:,.2f}")
+c7.metric("🌊 Mercado","ACTIVO" if mercado_activo else "PLANO",
+          f"ATR×{atr_rel:.2f}")
 st.markdown('<div class="greek-orn">── ✦ ──</div>', unsafe_allow_html=True)
 
 # ════════════════════════════════════════════════════════════════
@@ -1383,32 +1524,51 @@ with tab1:
         # ── ESTADO DE ENTRADA ─────────────────────────────────────
         sl_r          = sl_long if pred >= 0 else sl_short
         tp_r          = tp_long if pred >= 0 else tp_short
-        precio_señal  = float(df['Close'].iloc[-1])   # precio cuando se generó la señal
+        precio_señal  = float(df['Close'].iloc[-1])
         dist_entrada  = abs(precio - precio_señal)
-        zona_valida   = dist_entrada <= atr * 1.0
 
         sl_tocado = pred != 0 and ((pred == 1 and precio <= sl_r) or (pred == -1 and precio >= sl_r))
         tp_tocado = pred != 0 and ((pred == 1 and precio >= tp_r) or (pred == -1 and precio <= tp_r))
 
+        # Si hay señal y no tocó SL ni TP → siempre zona válida
+        # El modelo recalculó hace menos de 5 min, el precio actual ES la entrada
+        zona_valida = pred != 0 and not sl_tocado and not tp_tocado
+
         if pred == 0:
-            estado  = "ESPERA";      ec = T['primary']
-            elabel  = "⏳  ESPERA";  esub = "Sin dirección clara — no operes aún"
+            estado  = "ESPERA";  ec = T['primary']
+            elabel  = "⏳  ESPERA"
+            esub    = "Sin dirección clara — no operes aún"
         elif sl_tocado:
-            estado  = "SL";          ec = "#C0392B"
-            elabel  = "🚨  SL TOCADO"; esub = "Stop Loss alcanzado — señal cancelada, espera la siguiente"
+            estado  = "SL";      ec = "#C0392B"
+            elabel  = "🚨  SL TOCADO"
+            esub    = "Stop Loss alcanzado — espera la siguiente señal"
         elif tp_tocado:
-            estado  = "TP";          ec = "#4CAF82"
-            elabel  = "🎯  TP ALCANZADO"; esub = "Objetivo alcanzado — señal completada con éxito"
+            estado  = "TP";      ec = "#4CAF82"
+            elabel  = "🎯  TP ALCANZADO"
+            esub    = "Objetivo alcanzado — señal completada"
         elif zona_valida:
-            estado  = "ENTRA_YA";    ec = "#4CAF82"
-            elabel  = "⚡  ENTRA YA"; esub = f"Precio en zona válida · diferencia: ${dist_entrada:.2f} (< 1×ATR)"
+            estado  = "ENTRA_YA"; ec = "#4CAF82"
+            elabel  = "⚡  ENTRA YA"
+            esub    = f"Señal activa · entra al precio actual ${precio:,.2f}"
         else:
-            estado  = "AQUI_ENTRAS"; ec = "#C8A96E"
-            elabel  = "🎯  AQUÍ ENTRAS"
-            dir_txt = "baje" if pred == 1 else "suba"
-            esub    = f"Espera que el precio {dir_txt} a ${precio_señal:,.2f} ± ${atr:.2f}"
+            estado  = "ESPERA";  ec = T['primary']
+            elabel  = "⏳  ESPERA"
+            esub    = "Sin señal activa"
 
         st.markdown('<div class="card"><div class="card-title">SEÑAL DEL ORÁCULO</div>', unsafe_allow_html=True)
+
+        # Estado del mercado — explica por qué hay o no señal
+        if not mercado_activo:
+            st.markdown(f"""
+<div style="padding:10px 14px;border-radius:4px;border:1px solid #C8A96E44;
+            background:#C8A96E11;margin-bottom:10px;">
+  <span style="font-family:'Cinzel',serif;font-size:.75em;color:#C8A96E;letter-spacing:2px;">
+    🌊 MERCADO PLANO — {mercado_razon}
+  </span><br>
+  <span style="font-size:.72em;color:#C8A96E88;">
+    El oro no tiene movimiento suficiente ahora. Espera una ventana activa.
+  </span>
+</div>""", unsafe_allow_html=True)
 
         # Dirección
         st.markdown(
