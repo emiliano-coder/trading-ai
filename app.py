@@ -614,10 +614,10 @@ def detect_smc_advanced(df, lookback=50):
 #  MODOS DE SEÑAL
 # ════════════════════════════════════════════════════════════════
 MODO_CONFIG = {
-    'Oráculo 🏛️':  {'umbral':0.003,'atr_sl':1.5,'atr_tp':2.5,'min_conf':55,'require_smc':True,
-                     'desc':'Señales precisas. Requiere BOS + OB + EMA alineados.'},
-    'Gladiador ⚔️': {'umbral':0.001,'atr_sl':0.6,'atr_tp':1.2,'min_conf':40,'require_smc':False,
-                     'desc':'Micro entradas. Rebotes en OB, FVG, EQH/EQL. Más trades, más riesgo.'},
+    'Oráculo 🏛️':  {'umbral':0.003,'atr_sl':1.5,'atr_tp':2.5,'min_conf':52,'require_smc':True,
+                     'desc':'Señales de calidad. Base: BOS + sesión. Confirmación: RSI div o OB.'},
+    'Gladiador ⚔️': {'umbral':0.001,'atr_sl':0.7,'atr_tp':1.4,'min_conf':40,'require_smc':False,
+                     'desc':'Más señales. Micro entradas en OB, FVG, EQH/EQL. Mayor riesgo.'},
 }
 STYLE_CONFIG = {
     "Scalping":    {"interval":"5m",  "period":"5d",   "label":"M5"},
@@ -625,99 +625,230 @@ STYLE_CONFIG = {
     "Swing":       {"interval":"4h",  "period":"180d", "label":"H4"},
 }
 
-def _filtro_volatilidad(df) -> tuple[bool, str]:
+# ════════════════════════════════════════════════════════════════
+#  MOTOR DE SEÑALES — SISTEMA DE 3 NIVELES
+#
+#  Nivel 1 FUERTE  — BOS + sesión + RSI div o OB + ML confirmado
+#  Nivel 2 MEDIA   — BOS + sesión + ML confirmado (sin doble conf)
+#  Nivel 3 DÉBIL   — Solo SMC o solo ML (informativa, no opera)
+# ════════════════════════════════════════════════════════════════
+
+def _score_mercado(df) -> tuple[float, str]:
     """
-    Filtra señales en mercado plano.
-    Retorna (mercado_activo, razon)
+    Score 0-3 de actividad del mercado.
+    0 = plano, 3 = muy activo
     """
-    if 'ATR_rel' not in df.columns:
-        return True, "OK"
-    atr_rel = float(df['ATR_rel'].iloc[-1])
-    if atr_rel < 0.75:
-        return False, f"Mercado plano — ATR relativo: {atr_rel:.2f} (mín: 0.75)"
+    score = 0
+    razones = []
+    if 'ATR_rel' in df.columns:
+        atr_rel = float(df['ATR_rel'].iloc[-1])
+        if atr_rel >= 1.1:   score += 1.5; razones.append(f"ATR×{atr_rel:.2f} 🔥")
+        elif atr_rel >= 0.8: score += 1.0; razones.append(f"ATR×{atr_rel:.2f} ✅")
+        elif atr_rel >= 0.65: score += 0.5; razones.append(f"ATR×{atr_rel:.2f} ⚠️")
+        else: razones.append(f"ATR×{atr_rel:.2f} ❌ plano")
     if 'BB_width' in df.columns:
         bb_w     = float(df['BB_width'].iloc[-1])
-        bb_w_avg = float(df['BB_width'].rolling(20).mean().iloc[-1]) if len(df) >= 20 else bb_w
-        if bb_w < bb_w_avg * 0.6:
-            return False, f"Bandas muy comprimidas — sin movimiento"
-    return True, f"Mercado activo — ATR rel: {atr_rel:.2f}"
+        bb_w_avg = float(df['BB_width'].rolling(20).mean().iloc[-1])
+        if bb_w > bb_w_avg * 1.0: score += 0.5; razones.append("BB expandido ✅")
+        elif bb_w < bb_w_avg * 0.6: razones.append("BB comprimido ❌")
+    if 'Vol_ratio' in df.columns:
+        vr = float(df['Vol_ratio'].iloc[-1])
+        if vr >= 1.3: score += 1.0; razones.append(f"Vol×{vr:.1f} 🔥")
+        elif vr >= 0.9: score += 0.5; razones.append(f"Vol×{vr:.1f} ✅")
+    return score, " · ".join(razones) if razones else "Sin datos"
 
-def _filtro_sesion(hora_mx: int) -> tuple[bool, str]:
+def _score_sesion(hora_mx: int) -> tuple[float, str]:
     """
-    Solo señales en ventanas de alta liquidez para XAU/USD.
-    Fuera de ventana = ruido, no señal real.
+    Score 0-2 según sesión activa.
+    London+NY = 2, London = 1.5, NY tarde = 1, resto = 0
     """
-    ventanas = [(3,5,"London Open"),(7,12,"London+NY"),(12,15,"NY tarde")]
-    for ini, fin, nombre in ventanas:
-        if ini <= hora_mx < fin:
-            return True, nombre
-    return False, "Fuera de ventana — mercado sin liquidez"
+    if 8  <= hora_mx < 12: return 2.0, "London+NY 🔥 (mejor ventana)"
+    if 3  <= hora_mx < 5:  return 1.5, "London Open ✅"
+    if 12 <= hora_mx < 15: return 1.0, "NY tarde ✅"
+    if 7  <= hora_mx < 8:  return 0.8, "Pre-NY (aceptable)"
+    return 0.0, "Fuera de ventana ❌"
+
+def _score_smc(smc, pred) -> tuple[float, str]:
+    """
+    Score 0-3 de confirmación SMC.
+    BOS = base, OB = confirmación, FVG/EQH = complemento
+    """
+    score = 0; razones = []
+    has_bos = bool(smc['bos'])
+    has_msb = bool(smc['msb'])
+    if has_bos:
+        bos_dir = 'ALCISTA' if any('ALCISTA' in b['tipo'] for b in smc['bos']) else 'BAJISTA'
+        if (pred == 1 and bos_dir == 'ALCISTA') or (pred == -1 and bos_dir == 'BAJISTA'):
+            score += 1.5; razones.append("BOS alineado 🔥")
+        else:
+            score += 0.3; razones.append("BOS opuesto ⚠️")
+    if has_msb:
+        msb_dir = 'ALCISTA' if any('ALCISTA' in m['tipo'] for m in smc['msb']) else 'BAJISTA'
+        if (pred == 1 and msb_dir == 'ALCISTA') or (pred == -1 and msb_dir == 'BAJISTA'):
+            score += 0.5; razones.append("MSB confirmado ✅")
+    # Order Block cerca
+    ob_alineado = any(
+        ('ALCISTA' in ob['tipo'] and pred == 1) or ('BAJISTA' in ob['tipo'] and pred == -1)
+        for ob in smc['order_blocks']
+    )
+    if ob_alineado: score += 1.0; razones.append("OB alineado ✅")
+    # FVG cerca
+    if smc.get('fvg'): score += 0.3; razones.append("FVG presente")
+    return score, " · ".join(razones) if razones else "Sin estructura"
+
+def _score_rsi(df, pred) -> tuple[float, str]:
+    """
+    Score 0-2 de confirmación RSI.
+    Divergencia = señal de reversión real.
+    """
+    score = 0; razones = []
+    if 'RSI' not in df.columns: return 0, "Sin RSI"
+    rsi      = float(df['RSI'].iloc[-1])
+    rsi_fast = float(df['RSI_fast'].iloc[-1]) if 'RSI_fast' in df.columns else rsi
+    rsi_d    = float(df['RSI_delta'].iloc[-1]) if 'RSI_delta' in df.columns else 0
+
+    # RSI en zona correcta
+    if pred == 1:
+        if 35 <= rsi <= 60:   score += 1.0; razones.append(f"RSI {rsi:.0f} zona alcista ✅")
+        elif rsi < 35:        score += 1.5; razones.append(f"RSI {rsi:.0f} sobrevendido 🔥")
+        elif rsi > 70:        score -= 0.5; razones.append(f"RSI {rsi:.0f} sobrecomprado ⚠️")
+    elif pred == -1:
+        if 40 <= rsi <= 65:   score += 1.0; razones.append(f"RSI {rsi:.0f} zona bajista ✅")
+        elif rsi > 65:        score += 1.5; razones.append(f"RSI {rsi:.0f} sobrecomprado 🔥")
+        elif rsi < 30:        score -= 0.5; razones.append(f"RSI {rsi:.0f} sobrevendido ⚠️")
+
+    # Divergencia RSI — muy fiable
+    if pred == 1  and rsi_d > 2:  score += 0.5; razones.append("RSI acelerando ✅")
+    if pred == -1 and rsi_d < -2: score += 0.5; razones.append("RSI cayendo ✅")
+
+    # RSI fast confirmando
+    if pred == 1  and rsi_fast > rsi: score += 0.3; razones.append("RSI7 > RSI14 ✅")
+    if pred == -1 and rsi_fast < rsi: score += 0.3; razones.append("RSI7 < RSI14 ✅")
+
+    return max(0, score), " · ".join(razones) if razones else "RSI neutral"
+
+def _nivel_señal(score_total: float) -> tuple[int, str, str]:
+    """
+    Convierte score total en nivel de señal.
+    Retorna (nivel, label, color)
+    """
+    if score_total >= 6.0:
+        return 1, "🔥 SEÑAL FUERTE",  "#4CAF82"
+    elif score_total >= 3.5:
+        return 2, "✅ SEÑAL MEDIA",   "#C8A96E"
+    elif score_total >= 2.0:
+        return 3, "📡 SEÑAL DÉBIL",   "#6B8FCE"
+    else:
+        return 0, "⏳ SIN SEÑAL",     "#555555"
 
 def get_signal_oraculo(df, smc, features, m, sc, atr_sl, atr_tp):
     """
-    Oráculo mejorado:
-    1. Filtro de volatilidad mínima
-    2. Filtro de sesión activa
-    3. Requiere BOS + OB alineados (igual que antes)
-    4. Requiere confianza mínima 58%
+    Oráculo — sistema de 3 niveles.
+    Opera en nivel 1 y 2. Nivel 3 = informativo. 0 = espera.
     """
     ul   = df[features].iloc[-1:]
-    pred = m.predict(sc.transform(ul))[0]
+    pred = int(m.predict(sc.transform(ul))[0])
     prob = m.predict_proba(sc.transform(ul))[0]
     conf = max(prob) * 100
     p    = float(df['Close'].iloc[-1])
     atr  = float(df['ATR'].iloc[-1])
 
-    # Filtro 1: volatilidad
-    mercado_ok, _ = _filtro_volatilidad(df)
-    if not mercado_ok:
+    hora_mx = datetime.now(pytz.timezone('America/Mexico_City')).hour
+
+    # ── Calcular scores ───────────────────────────────────────────
+    s_mercado, r_mercado = _score_mercado(df)
+    s_sesion,  r_sesion  = _score_sesion(hora_mx)
+    s_smc,     r_smc     = _score_smc(smc, pred)
+    s_rsi,     r_rsi     = _score_rsi(df, pred)
+    s_ml = (conf / 100) * 2.0   # ML aporta máx 2 puntos
+
+    score_total = s_mercado + s_sesion + s_smc + s_rsi + s_ml
+    nivel, nivel_label, nivel_color = _nivel_señal(score_total)
+
+    # Oráculo requiere mínimo nivel 2 para dar señal
+    if nivel < 2:
         pred = 0
 
-    # Filtro 2: confianza mínima
-    if conf < 58:
+    # Mercado completamente plano = no operar nunca
+    if s_mercado < 0.5:
         pred = 0
 
-    # Filtro 3: SMC — BOS + OB alineados
-    if pred != 0:
-        smc_long  = smc['bias']=='ALCISTA' and any('ALCISTA' in ob['tipo'] for ob in smc['order_blocks'])
-        smc_short = smc['bias']=='BAJISTA' and any('BAJISTA' in ob['tipo'] for ob in smc['order_blocks'])
-        has_bos   = bool(smc['bos'])
-        if pred == 1  and not (smc_long  or has_bos): pred = 0
-        if pred == -1 and not (smc_short or has_bos): pred = 0
+    scores = {
+        'total': round(score_total, 2),
+        'mercado': round(s_mercado, 2),
+        'sesion':  round(s_sesion,  2),
+        'smc':     round(s_smc,     2),
+        'rsi':     round(s_rsi,     2),
+        'ml':      round(s_ml,      2),
+        'nivel':   nivel,
+        'label':   nivel_label,
+        'color':   nivel_color,
+        'razon_mercado': r_mercado,
+        'razon_sesion':  r_sesion,
+        'razon_smc':     r_smc,
+        'razon_rsi':     r_rsi,
+    }
 
-    return int(pred), prob, p, atr, round(p-atr*atr_sl,2), round(p+atr*atr_tp,2), round(p+atr*atr_sl,2), round(p-atr*atr_tp,2)
+    return int(pred), prob, p, atr, \
+           round(p-atr*atr_sl,2), round(p+atr*atr_tp,2), \
+           round(p+atr*atr_sl,2), round(p-atr*atr_tp,2), scores
 
 def get_signal_gladiador(df, smc, features, m, sc, atr_sl, atr_tp):
     """
-    Gladiador mejorado:
-    1. Filtro de volatilidad mínima (más suave que Oráculo)
-    2. Confianza mínima 42%
-    3. Micro entradas en OB/FVG/EQH/EQL cuando ML dice lateral
+    Gladiador — más permisivo, opera desde nivel 2 con umbral menor.
+    También usa micro entradas SMC cuando ML es lateral.
     """
     ul   = df[features].iloc[-1:]
-    pred = m.predict(sc.transform(ul))[0]
+    pred = int(m.predict(sc.transform(ul))[0])
     prob = m.predict_proba(sc.transform(ul))[0]
     conf = max(prob) * 100
     p    = float(df['Close'].iloc[-1])
     atr  = float(df['ATR'].iloc[-1])
 
-    # Filtro volatilidad (más permisivo — 0.65 vs 0.75 del Oráculo)
-    if 'ATR_rel' in df.columns:
-        atr_rel = float(df['ATR_rel'].iloc[-1])
-        if atr_rel < 0.65:
-            pred = 0
+    hora_mx = datetime.now(pytz.timezone('America/Mexico_City')).hour
 
-    # Micro entrada SMC si ML dice lateral pero hay zona clara
-    if pred == 0 and smc.get('gladiador_entry') and conf >= 42:
+    # Micro entrada SMC si ML dice lateral
+    if pred == 0 and smc.get('gladiador_entry') and conf >= 38:
         ge = smc['gladiador_entry']
-        if 'LONG'  in ge: pred = 1
+        if 'LONG' in ge:   pred = 1
         elif 'SHORT' in ge: pred = -1
 
-    # Confianza mínima
-    if conf < 42:
+    s_mercado, r_mercado = _score_mercado(df)
+    s_sesion,  r_sesion  = _score_sesion(hora_mx)
+    s_smc,     r_smc     = _score_smc(smc, pred)
+    s_rsi,     r_rsi     = _score_rsi(df, pred)
+    s_ml = (conf / 100) * 2.0
+
+    score_total = s_mercado + s_sesion + s_smc + s_rsi + s_ml
+    nivel, nivel_label, nivel_color = _nivel_señal(score_total)
+
+    # Gladiador opera desde nivel 2 con threshold menor
+    if nivel < 2 and score_total < 3.0:
         pred = 0
 
-    return int(pred), prob, p, atr, round(p-atr*atr_sl,2), round(p+atr*atr_tp,2), round(p+atr*atr_sl,2), round(p-atr*atr_tp,2)
+    # Mercado muerto = no operar
+    if s_mercado < 0.4:
+        pred = 0
+
+    scores = {
+        'total': round(score_total, 2),
+        'mercado': round(s_mercado, 2),
+        'sesion':  round(s_sesion,  2),
+        'smc':     round(s_smc,     2),
+        'rsi':     round(s_rsi,     2),
+        'ml':      round(s_ml,      2),
+        'nivel':   nivel,
+        'label':   nivel_label,
+        'color':   nivel_color,
+        'razon_mercado': r_mercado,
+        'razon_sesion':  r_sesion,
+        'razon_smc':     r_smc,
+        'razon_rsi':     r_rsi,
+    }
+
+    return int(pred), prob, p, atr, \
+           round(p-atr*atr_sl,2), round(p+atr*atr_tp,2), \
+           round(p+atr*atr_sl,2), round(p-atr*atr_tp,2), scores
 
 def calc_pos(capital, risk, entrada, sl):
     r = capital*(risk/100); d = abs(entrada-sl)
@@ -1077,7 +1208,9 @@ wyckoff = run_wyckoff(df)
 rsi   = float(df['RSI'].iloc[-1])
 atr   = float(df['ATR'].iloc[-1])
 atr_rel = float(df['ATR_rel'].iloc[-1]) if 'ATR_rel' in df.columns else 1.0
-mercado_activo, mercado_razon = _filtro_volatilidad(df)
+# scores se calcula después de get_signal — inicializar aquí como placeholder
+mercado_activo  = True   # se actualiza con scores después
+mercado_razon   = "Calculando..." 
 bb_up = float(df['BB_upper'].iloc[-1])
 bb_low= float(df['BB_lower'].iloc[-1])
 ema20 = float(df['EMA_20'].iloc[-1])
@@ -1085,9 +1218,9 @@ ema50 = float(df['EMA_50'].iloc[-1])
 
 # Señal según modo
 if 'Gladiador' in st.session_state.modo:
-    pred, prob, _, _, sl_long, tp_long, sl_short, tp_short = get_signal_gladiador(df_trained, smc, features, m_model, sc_model, MC['atr_sl'], MC['atr_tp'])
+    pred, prob, _, _, sl_long, tp_long, sl_short, tp_short, scores = get_signal_gladiador(df_trained, smc, features, m_model, sc_model, MC['atr_sl'], MC['atr_tp'])
 else:
-    pred, prob, _, _, sl_long, tp_long, sl_short, tp_short = get_signal_oraculo(df_trained, smc, features, m_model, sc_model, MC['atr_sl'], MC['atr_tp'])
+    pred, prob, _, _, sl_long, tp_long, sl_short, tp_short, scores = get_signal_oraculo(df_trained, smc, features, m_model, sc_model, MC['atr_sl'], MC['atr_tp'])
 
 rr   = round(MC['atr_tp'] / MC['atr_sl'], 2)
 conf = max(prob) * 100
@@ -1511,8 +1644,10 @@ c3.metric("⚡ ATR",f"{atr:.2f}",f"rel:{atr_rel:.2f}")
 c4.metric("🎯 Señal","LONG" if pred==1 else "SHORT" if pred==-1 else "LAT",f"{conf:.1f}%")
 c5.metric("📐 R:R",f"1:{rr}")
 c6.metric("🏺 Wyckoff",wyckoff['trend'])
+s_mercado_val = scores.get('mercado', 1.0) if 'scores' in dir() else 1.0
+mercado_activo = s_mercado_val >= 0.5
 c7.metric("🌊 Mercado","ACTIVO" if mercado_activo else "PLANO",
-          f"ATR×{atr_rel:.2f}")
+          f"Score:{s_mercado_val:.1f}")
 st.markdown('<div class="greek-orn">── ✦ ──</div>', unsafe_allow_html=True)
 
 # ════════════════════════════════════════════════════════════════
@@ -1563,20 +1698,57 @@ with tab1:
 
         st.markdown('<div class="card"><div class="card-title">SEÑAL DEL ORÁCULO</div>', unsafe_allow_html=True)
 
-        # Estado del mercado — explica por qué hay o no señal
-        if not mercado_activo:
-            st.markdown(f"""
-<div style="padding:10px 14px;border-radius:4px;border:1px solid #C8A96E44;
-            background:#C8A96E11;margin-bottom:10px;">
-  <span style="font-family:'Cinzel',serif;font-size:.75em;color:#C8A96E;letter-spacing:2px;">
-    🌊 MERCADO PLANO — {mercado_razon}
-  </span><br>
-  <span style="font-size:.72em;color:#C8A96E88;">
-    El oro no tiene movimiento suficiente ahora. Espera una ventana activa.
-  </span>
+        # Scorecard del sistema de 3 niveles
+        nivel       = scores.get('nivel', 0)
+        nivel_label = scores.get('label', '⏳ SIN SEÑAL')
+        nivel_color = scores.get('color', '#555555')
+        score_total = scores.get('total', 0)
+
+        # Badge de nivel
+        st.markdown(f"""
+<div style="margin:6px 0 10px 0;padding:12px 16px;border-radius:4px;
+            border:2px solid {nivel_color}88;background:{nivel_color}14;">
+  <div style="font-family:'Cinzel',serif;font-size:1.2em;font-weight:900;
+              color:{nivel_color};letter-spacing:3px;">{nivel_label}</div>
+  <div style="font-size:.75em;color:{nivel_color}99;margin-top:3px;letter-spacing:1px;">
+    Score total: {score_total:.1f}/10 · {'Opera' if nivel <= 2 and nivel > 0 else 'Solo informativo' if nivel == 3 else 'Espera'}
+  </div>
 </div>""", unsafe_allow_html=True)
 
+        # Desglose de scores
+        if nivel > 0:
+            cols_s = st.columns(5)
+            score_items = [
+                ("🌊", "Mercado", scores.get('mercado',0), 3.0),
+                ("🕐", "Sesión",  scores.get('sesion', 0), 2.0),
+                ("🏛️", "SMC",    scores.get('smc',    0), 3.0),
+                ("📊", "RSI",     scores.get('rsi',    0), 2.0),
+                ("🤖", "ML",      scores.get('ml',     0), 2.0),
+            ]
+            for col, (icon, name, val, max_val) in zip(cols_s, score_items):
+                pct  = min(val/max_val, 1.0)
+                clr  = '#4CAF82' if pct >= 0.7 else '#C8A96E' if pct >= 0.4 else '#C0392B'
+                col.markdown(
+                    f'<div style="text-align:center;padding:6px 4px;'
+                    f'background:{T["card"]};border-radius:3px;'
+                    f'border-top:3px solid {clr};">'
+                    f'<div style="font-size:.7em;color:{T["primary"]}88;">{icon} {name}</div>'
+                    f'<div style="font-size:1.1em;font-weight:700;color:{clr};">{val:.1f}</div>'
+                    f'<div style="font-size:.65em;color:{T["primary"]}55;">/{max_val:.0f}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True)
+            # Razones detalladas
+            with st.expander("📋 Ver detalle del análisis"):
+                st.caption(f"🌊 Mercado: {scores.get('razon_mercado','')}")
+                st.caption(f"🕐 Sesión:  {scores.get('razon_sesion','')}")
+                st.caption(f"🏛️ SMC:     {scores.get('razon_smc','')}")
+                st.caption(f"📊 RSI:     {scores.get('razon_rsi','')}")
+
         # Dirección
+        st.markdown(
+            f'<div style="margin-top:10px;" class="{"sig-long" if pred==1 else "sig-short" if pred==-1 else "sig-neu"}">'
+            f'{ET.get(pred)}</div>',
+            unsafe_allow_html=True)
         st.markdown(
             f'<div class="{"sig-long" if pred==1 else "sig-short" if pred==-1 else "sig-neu"}">'
             f'{ET.get(pred)}</div>',
