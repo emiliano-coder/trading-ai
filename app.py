@@ -203,57 +203,63 @@ def get_data(interval="1d", period="2y"):
 
 @st.cache_data(ttl=300)  # 5 minutos
 def add_ind(df_json):
-    """
-    Indicadores optimizados para XAU/USD:
-    CONSERVADOS:  RSI, MACD hist, BB width, ATR, OBV, EMAs 20/50
-    NUEVOS:       ATR relativo, RSI divergencia, velas patrón, sesión
-    ELIMINADOS:   EMA200 (muy lenta para scalping), Stoch (duplica RSI),
-                  Returns 3d/5d (demasiado rezagados), Dist_EMA200
-    """
     df = pd.read_json(io.StringIO(df_json), orient='split')
 
-    # ── EMAs principales ─────────────────────────────────────────
+    # Asegurar que Volume existe y no tiene ceros
+    if 'Volume' not in df.columns or df['Volume'].sum() == 0:
+        df['Volume'] = 1.0
+    df['Volume'] = df['Volume'].replace(0, 1.0)
+
+    # ── EMAs ─────────────────────────────────────────────────────
+    df['EMA_9']   = ta.trend.ema_indicator(df['Close'], window=9)
     df['EMA_20']  = ta.trend.ema_indicator(df['Close'], window=20)
     df['EMA_50']  = ta.trend.ema_indicator(df['Close'], window=50)
-    df['EMA_9']   = ta.trend.ema_indicator(df['Close'], window=9)   # señal rápida
 
     # ── Momentum ─────────────────────────────────────────────────
-    df['RSI']        = ta.momentum.rsi(df['Close'], window=14)
-    df['RSI_fast']   = ta.momentum.rsi(df['Close'], window=7)       # RSI rápido para scalping
-    # Divergencia RSI: RSI sube pero precio baja = señal de reversión
-    df['RSI_delta']  = df['RSI'].diff(3)
+    df['RSI']             = ta.momentum.rsi(df['Close'], window=14)
+    df['RSI_fast']        = ta.momentum.rsi(df['Close'], window=7)
+    df['RSI_delta']       = df['RSI'].diff(3)
 
-    # ── MACD — solo histograma (el más informativo) ───────────────
-    df['MACD_hist']  = ta.trend.macd_diff(df['Close'])
-    df['MACD_hist_delta'] = df['MACD_hist'].diff(2)  # aceleración del MACD
+    # ── MACD ─────────────────────────────────────────────────────
+    df['MACD_hist']       = ta.trend.macd_diff(df['Close'])
+    df['MACD_hist_delta'] = df['MACD_hist'].diff(2)
 
     # ── Volatilidad ───────────────────────────────────────────────
     df['BB_upper'] = ta.volatility.bollinger_hband(df['Close'])
     df['BB_lower'] = ta.volatility.bollinger_lband(df['Close'])
     df['BB_width'] = (df['BB_upper'] - df['BB_lower']) / df['Close']
     df['ATR']      = ta.volatility.average_true_range(df['High'], df['Low'], df['Close'])
-    # ATR relativo — clave para filtrar mercado plano
-    df['ATR_avg']  = df['ATR'].rolling(20).mean()
-    df['ATR_rel']  = df['ATR'] / df['ATR_avg']  # >1 = mercado activo, <0.8 = mercado plano
+    atr_avg        = df['ATR'].rolling(20).mean()
+    df['ATR_avg']  = atr_avg
+    df['ATR_rel']  = (df['ATR'] / atr_avg).fillna(1.0)
 
-    # ── Volumen ───────────────────────────────────────────────────
-    df['OBV']      = ta.volume.on_balance_volume(df['Close'], df['Volume'])
-    df['OBV_delta'] = df['OBV'].pct_change(3)    # cambio reciente en volumen
-    # Volume ratio: vela actual vs promedio — detecta impulso institucional
-    df['Vol_ratio'] = df['Volume'] / df['Volume'].rolling(20).mean()
+    # ── Volumen — seguro ante datos sin volumen real ──────────────
+    df['OBV']       = ta.volume.on_balance_volume(df['Close'], df['Volume'])
+    df['OBV_delta'] = df['OBV'].pct_change(3).fillna(0)
+    vol_avg         = df['Volume'].rolling(20).mean().replace(0, 1)
+    df['Vol_ratio'] = (df['Volume'] / vol_avg).fillna(1.0)
 
-    # ── Distancia a EMAs (precio relativo) ───────────────────────
+    # ── Distancia EMAs ────────────────────────────────────────────
     df['Dist_EMA20'] = (df['Close'] - df['EMA_20']) / df['Close'] * 100
     df['Dist_EMA50'] = (df['Close'] - df['EMA_50']) / df['Close'] * 100
-    df['EMA_cross']  = df['EMA_9'] - df['EMA_20']   # cruce de EMAs rápidas
+    df['EMA_cross']  = df['EMA_9'] - df['EMA_20']
 
     # ── Price action ──────────────────────────────────────────────
-    df['Return_1d']  = df['Close'].pct_change(1)
-    df['High_Low']   = (df['High'] - df['Low']) / df['Close']  # rango de vela
-    # Body ratio: cuerpo vs mecha — velas con cuerpo grande = dirección clara
-    df['Body_ratio'] = abs(df['Close'] - df['Open']) / (df['High'] - df['Low'] + 1e-9)
+    df['Return_1d']  = df['Close'].pct_change(1).fillna(0)
+    df['High_Low']   = (df['High'] - df['Low']) / df['Close']
+    hl_range         = (df['High'] - df['Low']).replace(0, 1e-9)
+    df['Body_ratio'] = (abs(df['Close'] - df['Open']) / hl_range).fillna(0.5)
 
-    df.dropna(inplace=True)
+    # Rellenar cualquier NaN restante con 0 antes de dropna
+    feat_cols = ['EMA_9','EMA_20','EMA_50','RSI','RSI_fast','RSI_delta',
+                 'MACD_hist','MACD_hist_delta','BB_width','ATR','ATR_rel',
+                 'OBV_delta','Vol_ratio','Dist_EMA20','Dist_EMA50',
+                 'EMA_cross','Return_1d','High_Low','Body_ratio']
+    for c in feat_cols:
+        if c in df.columns:
+            df[c] = df[c].ffill().fillna(0)
+
+    df.dropna(subset=['Close','High','Low','Open'], inplace=True)
     return df
 
 @st.cache_data(ttl=300)  # 5 minutos
