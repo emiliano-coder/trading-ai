@@ -272,8 +272,9 @@ def train_model(df_json, umbral):
     """
     df = pd.read_json(io.StringIO(df_json), orient='split')
 
-    # Target — movimiento futuro
-    df['Future_Return'] = df['Close'].pct_change(5).shift(-5)
+    # Target — horizonte según estilo de trading
+    _horizonte = SC.get('horizonte', 5) if 'SC' in dir() else 5
+    df['Future_Return'] = df['Close'].pct_change(_horizonte).shift(-_horizonte)
     df['Target'] = 0
     df.loc[df['Future_Return'] >  umbral, 'Target'] =  1
     df.loc[df['Future_Return'] < -umbral, 'Target'] = -1
@@ -644,32 +645,50 @@ MODO_CONFIG = {
     },
 }
 STYLE_CONFIG = {
-    # Scalping M5: SL muy ajustado, TP pequeño, señales frecuentes
+    # ── SCALPING M5 ───────────────────────────────────────────────
+    # Velas de 5 minutos. Trades de 5-30 minutos.
+    # SL muy pequeño ($3-8), TP pequeño ($5-15)
+    # Señales frecuentes, alta concentración requerida
     "Scalping": {
-        "interval":"5m", "period":"5d", "label":"M5",
-        "atr_sl": 0.5,   # SL = 0.5×ATR — muy ajustado
-        "atr_tp": 1.0,   # TP = 1×ATR
-        "umbral": 0.0008,# movimiento mínimo 0.08%
-        "min_score": 3.0,# score mínimo más bajo — más señales
-        "desc": "M5 · SL ajustado · Máx concentración · Solo London+NY Open"
+        "interval": "5m",    # datos en velas de 5 min
+        "period":   "5d",
+        "label":    "M5",
+        "atr_sl":   0.4,     # SL = 0.4×ATR (~$3-6)
+        "atr_tp":   0.8,     # TP = 0.8×ATR (~$6-12) R:R 1:2
+        "umbral":   0.0006,  # detecta movimientos desde 0.06%
+        "min_score":2.5,     # umbral bajo → más señales
+        "horizonte":2,       # predice 2 velas adelante (10 min)
+        "desc": "M5 · Trades 5-30min · SL $3-8 · Solo London+NY Open"
     },
-    # Day Trading M15: balance entre frecuencia y calidad
+    # ── DAY TRADING M15 ───────────────────────────────────────────
+    # Velas de 15 minutos. Trades de 1-4 horas.
+    # SL medio ($15-30), TP medio ($30-60)
+    # Balance entre frecuencia y calidad
     "Day Trading": {
-        "interval":"15m", "period":"10d", "label":"M15",
-        "atr_sl": 1.0,   # SL = 1×ATR
-        "atr_tp": 2.0,   # TP = 2×ATR
-        "umbral": 0.002, # movimiento mínimo 0.2%
-        "min_score": 4.0,# score mínimo medio
-        "desc": "M15 · R:R 1:2 · Cierra antes 5PM MX"
+        "interval": "15m",   # datos en velas de 15 min
+        "period":   "10d",
+        "label":    "M15",
+        "atr_sl":   1.2,     # SL = 1.2×ATR (~$15-25)
+        "atr_tp":   2.4,     # TP = 2.4×ATR (~$30-50) R:R 1:2
+        "umbral":   0.0025,  # detecta movimientos desde 0.25%
+        "min_score":4.0,     # umbral medio → balance calidad/frecuencia
+        "horizonte":5,       # predice 5 velas adelante (75 min)
+        "desc": "M15 · Trades 1-4h · SL $15-25 · Cierra antes 5PM MX"
     },
-    # Swing H4: pocas señales pero de alta calidad
+    # ── SWING H4 ──────────────────────────────────────────────────
+    # Velas de 4 horas. Trades de 1-5 días.
+    # SL amplio ($50-100), TP amplio ($100-200)
+    # Pocas señales, alta calidad, paciencia de días
     "Swing": {
-        "interval":"4h", "period":"180d", "label":"H4",
-        "atr_sl": 2.0,   # SL = 2×ATR — amplio
-        "atr_tp": 4.0,   # TP = 4×ATR
-        "umbral": 0.005, # movimiento mínimo 0.5%
-        "min_score": 5.0,# score mínimo alto — pocas pero buenas
-        "desc": "H4 · R:R 1:2 · Paciencia de días · BOS obligatorio"
+        "interval": "4h",    # datos en velas de 4h
+        "period":   "180d",
+        "label":    "H4",
+        "atr_sl":   2.5,     # SL = 2.5×ATR (~$50-100)
+        "atr_tp":   5.0,     # TP = 5×ATR (~$100-200) R:R 1:2
+        "umbral":   0.006,   # detecta solo movimientos grandes +0.6%
+        "min_score":5.5,     # umbral alto → solo señales premium
+        "horizonte":10,      # predice 10 velas adelante (40h)
+        "desc": "H4 · Trades 1-5 días · SL $50-100 · BOS D1 obligatorio"
     },
 }
 
@@ -1087,11 +1106,16 @@ if 'loaded' not in st.session_state:
 #  TEMAS
 # ════════════════════════════════════════════════════════════════
 THEMES = {
-    "Mármol Griego":  {"primary":"#C8A96E","secondary":"#8B6914","bg":"#0a0905","card":"#13100a"},
-    "Bronce Estoico": {"primary":"#CD7F32","secondary":"#8B4513","bg":"#080503","card":"#120a05"},
-    "Lapislázuli":    {"primary":"#6B8FCE","secondary":"#3A5A9B","bg":"#03060f","card":"#070b18"},
-    "Olimpo Oscuro":  {"primary":"#9B7FD4","secondary":"#6B4FA0","bg":"#060308","card":"#0d0614"},
-    "Athena":         {"primary":"#7BAF9E","secondary":"#3D7A68","bg":"#030a08","card":"#06120f"},
+    # Clásicos
+    "Mármol Griego":   {"primary":"#C8A96E","secondary":"#8B6914","bg":"#0a0905","card":"#13100a"},
+    "Bronce Estoico":  {"primary":"#CD7F32","secondary":"#8B4513","bg":"#080503","card":"#120a05"},
+    "Lapislázuli":     {"primary":"#6B8FCE","secondary":"#3A5A9B","bg":"#03060f","card":"#070b18"},
+    "Olimpo Oscuro":   {"primary":"#9B7FD4","secondary":"#6B4FA0","bg":"#060308","card":"#0d0614"},
+    "Athena":          {"primary":"#7BAF9E","secondary":"#3D7A68","bg":"#030a08","card":"#06120f"},
+    # Nuevos
+    "Sangre de Toro":  {"primary":"#C0392B","secondary":"#922B21","bg":"#080202","card":"#120504"},
+    "Plata Espartana": {"primary":"#BDC3C7","secondary":"#808B96","bg":"#050506","card":"#0d0d0f"},
+    "Oro Micénico":    {"primary":"#F4D03F","secondary":"#D4AC0D","bg":"#08080a","card":"#131305"},
 }
 T = THEMES.get(st.session_state.get('tema','Mármol Griego'), THEMES["Mármol Griego"])
 
@@ -1353,32 +1377,55 @@ sv2 = {
 }
 gh_save(sv2)
 
-# ── GUARDAR SEÑAL EN GITHUB (para telegram_bot.py) ───────────────
-# Genera y guarda signal.json cada vez que hay señal nueva
-_auto_mode = st.session_state.get('auto_mode', False)
-if pred != 0 and conf >= 60:
+# ── ALERTAS TELEGRAM AUTOMÁTICAS — TODAS las señales ─────────────
+_auto_mode  = st.session_state.get('auto_mode', False)
+_nivel_act  = scores.get('nivel', 0)
+_nivel_lbl  = scores.get('label', '⏳ SIN SEÑAL')
+
+# Guardar señal en GitHub siempre que haya dirección
+if pred != 0:
     _signal = build_signal(pred, prob, precio, sl_long, tp_long,
                            sl_short, tp_short, conf,
                            smc['bias'], wyckoff['trend'])
     save_signal_github(_signal, GH_TOKEN, GH_REPO)
 
-    # Si modo automático está ON — manda notificación Telegram
-    if _auto_mode:
-        _sl_r = sl_long if pred == 1 else sl_short
-        _tp_r = tp_long if pred == 1 else tp_short
-        _rr   = round(abs(_tp_r - precio) / abs(precio - _sl_r), 2) if abs(precio - _sl_r) > 0 else 0
-        _icon = "📈" if pred == 1 else "📉"
-        send_tg(
-            f"🏛️ *MIMI\\-AI — SEÑAL AUTO*\n"
-            f"{_icon} *{ET.get(pred)}*\n"
-            f"💰 Entrada: `${precio:,.2f}`\n"
-            f"🔴 SL: `${_sl_r:,.2f}`\n"
-            f"🟢 TP: `${_tp_r:,.2f}`\n"
-            f"📊 Confianza: `{conf:.1f}%`\n"
-            f"📐 R:R: `1:{_rr}`\n"
-            f"SMC: {smc['bias']} · Wyckoff: {wyckoff['trend']}\n\n"
-            f"_Responde 'entré' para registrar o 'no' para rechazar_"
-        )
+# Mandar a Telegram si modo auto ON — manda TODAS (Fuerte, Media y Débil)
+if _auto_mode and pred != 0:
+    _sl_r  = sl_long  if pred == 1 else sl_short
+    _tp_r  = tp_long  if pred == 1 else tp_short
+    _rr    = round(abs(_tp_r - precio) / abs(precio - _sl_r), 2) if abs(precio - _sl_r) > 0 else 0
+    _icon  = "📈" if pred == 1 else "📉"
+    _estilo = st.session_state.trade_style
+    _nivel_emoji = "🔥" if _nivel_act == 1 else "✅" if _nivel_act == 2 else "📡"
+    _operar = "Opera" if _nivel_act in [1,2] else "Solo informativa"
+    send_tg(
+        f"{_nivel_emoji} *MIMI\\-AI — {_nivel_lbl}*\n"
+        f"{'─'*24}\n"
+        f"{_icon} *{ET.get(pred)}* · {_estilo} · {SC['label']}\n"
+        f"💰 Precio : `${precio:,.2f}`\n"
+        f"🔴 SL     : `${_sl_r:,.2f}`\n"
+        f"🟢 TP     : `${_tp_r:,.2f}`\n"
+        f"📐 R:R    : `1:{_rr}`\n"
+        f"📊 Conf   : `{conf:.1f}%` · Score `{scores.get('total',0):.1f}/10`\n"
+        f"🏛️ SMC    : {smc['bias']} · BOS: {'✅' if smc['bos'] else '❌'} · OB: {len(smc['order_blocks'])}\n"
+        f"🏺 Wyckoff: {wyckoff['trend']}\n"
+        f"{'─'*24}\n"
+        f"_{_operar}_\n"
+        f"_Responde 'entré' · 'no' · 'estado'_"
+    )
+
+# Alerta Wyckoff AMD si hay señal activa (siempre que auto esté ON)
+if _auto_mode and wyckoff.get('active') and wyckoff['active'].get('tipo'):
+    _wa = wyckoff['active']
+    _wa_icon = "📈" if _wa.get('tipo') == 'LONG' else "📉"
+    send_tg(
+        f"🏺 *WYCKOFF AMD — SEÑAL*\n"
+        f"{_wa_icon} *{_wa['tipo']}* [{_wa.get('confianza','—')}]\n"
+        f"Entrada : `${_wa.get('entrada',0):,.2f}`\n"
+        f"SL      : `${_wa.get('sl',0):,.2f}`\n"
+        f"TP      : `${_wa.get('tp',0):,.2f}`\n"
+        f"Tendencia: {wyckoff['trend']}"
+    )
 
 # Procesar Telegram
 process_tg_updates(precio, pred, prob, rsi, atr, sl_long, tp_long, sl_short, tp_short, rr, smc, conf, ET, risk_pct, wyckoff)
