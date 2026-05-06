@@ -614,15 +614,63 @@ def detect_smc_advanced(df, lookback=50):
 #  MODOS DE SEÑAL
 # ════════════════════════════════════════════════════════════════
 MODO_CONFIG = {
-    'Oráculo 🏛️':  {'umbral':0.003,'atr_sl':1.5,'atr_tp':2.5,'min_conf':52,'require_smc':True,
-                     'desc':'Señales de calidad. Base: BOS + sesión. Confirmación: RSI div o OB.'},
-    'Gladiador ⚔️': {'umbral':0.001,'atr_sl':0.7,'atr_tp':1.4,'min_conf':40,'require_smc':False,
-                     'desc':'Más señales. Micro entradas en OB, FVG, EQH/EQL. Mayor riesgo.'},
+    # ORÁCULO — calidad sobre cantidad
+    # Requiere estructura completa: BOS + sesión + OB o RSI divergencia
+    # Opera SOLO en nivel FUERTE (≥6.0) o MEDIA (≥4.5)
+    # SL/TP amplios — trades de mayor duración
+    'Oráculo 🏛️': {
+        'umbral':    0.004,   # movimiento mínimo 0.4% para generar señal
+        'atr_sl':    1.8,     # SL amplio — aguanta ruido del mercado
+        'atr_tp':    3.5,     # TP 3.5×ATR — R:R 1:1.9
+        'min_conf':  58,      # confianza mínima ML alta
+        'min_score': 4.5,     # score mínimo alto
+        'req_bos':   True,    # BOS obligatorio siempre
+        'req_sesion':True,    # solo en ventanas activas
+        'desc': 'Calidad máxima. BOS obligatorio. Score ≥4.5. Solo ventanas activas.'
+    },
+    # GLADIADOR — frecuencia y agilidad
+    # Opera con estructura parcial: solo OB, FVG o EQH/EQL
+    # No requiere BOS — detecta micro movimientos
+    # SL/TP ajustados — trades rápidos de scalping
+    'Gladiador ⚔️': {
+        'umbral':    0.001,   # movimiento mínimo 0.1% — mucho más sensible
+        'atr_sl':    0.5,     # SL muy ajustado
+        'atr_tp':    1.0,     # TP 1×ATR — salida rápida
+        'min_conf':  38,      # confianza mínima baja — más señales
+        'min_score': 2.5,     # score mínimo bajo — opera con confluencia parcial
+        'req_bos':   False,   # NO requiere BOS
+        'req_sesion':False,   # puede operar fuera de ventana principal
+        'desc': 'Alta frecuencia. Sin BOS requerido. Score ≥2.5. Micro entradas SMC.'
+    },
 }
 STYLE_CONFIG = {
-    "Scalping":    {"interval":"5m",  "period":"5d",   "label":"M5"},
-    "Day Trading": {"interval":"15m", "period":"10d",  "label":"M15"},
-    "Swing":       {"interval":"4h",  "period":"180d", "label":"H4"},
+    # Scalping M5: SL muy ajustado, TP pequeño, señales frecuentes
+    "Scalping": {
+        "interval":"5m", "period":"5d", "label":"M5",
+        "atr_sl": 0.5,   # SL = 0.5×ATR — muy ajustado
+        "atr_tp": 1.0,   # TP = 1×ATR
+        "umbral": 0.0008,# movimiento mínimo 0.08%
+        "min_score": 3.0,# score mínimo más bajo — más señales
+        "desc": "M5 · SL ajustado · Máx concentración · Solo London+NY Open"
+    },
+    # Day Trading M15: balance entre frecuencia y calidad
+    "Day Trading": {
+        "interval":"15m", "period":"10d", "label":"M15",
+        "atr_sl": 1.0,   # SL = 1×ATR
+        "atr_tp": 2.0,   # TP = 2×ATR
+        "umbral": 0.002, # movimiento mínimo 0.2%
+        "min_score": 4.0,# score mínimo medio
+        "desc": "M15 · R:R 1:2 · Cierra antes 5PM MX"
+    },
+    # Swing H4: pocas señales pero de alta calidad
+    "Swing": {
+        "interval":"4h", "period":"180d", "label":"H4",
+        "atr_sl": 2.0,   # SL = 2×ATR — amplio
+        "atr_tp": 4.0,   # TP = 4×ATR
+        "umbral": 0.005, # movimiento mínimo 0.5%
+        "min_score": 5.0,# score mínimo alto — pocas pero buenas
+        "desc": "H4 · R:R 1:2 · Paciencia de días · BOS obligatorio"
+    },
 }
 
 # ════════════════════════════════════════════════════════════════
@@ -765,8 +813,9 @@ def get_signal_oraculo(df, smc, features, m, sc, atr_sl, atr_tp):
     score_total = s_mercado + s_sesion + s_smc + s_rsi + s_ml
     nivel, nivel_label, nivel_color = _nivel_señal(score_total)
 
-    # Oráculo requiere mínimo nivel 2 para dar señal
-    if nivel < 2:
+    # Oráculo usa su propio min_score — más estricto que Gladiador
+    min_score_modo = MC.get('min_score', 4.5) if 'MC' in dir() else 4.5
+    if score_total < min_score_modo:
         pred = 0
 
     # Mercado completamente plano = no operar nunca
@@ -822,8 +871,9 @@ def get_signal_gladiador(df, smc, features, m, sc, atr_sl, atr_tp):
     score_total = s_mercado + s_sesion + s_smc + s_rsi + s_ml
     nivel, nivel_label, nivel_color = _nivel_señal(score_total)
 
-    # Gladiador opera desde nivel 2 con threshold menor
-    if nivel < 2 and score_total < 3.0:
+    # Gladiador opera con threshold mucho más bajo que Oráculo
+    min_score_modo = MC.get('min_score', 2.5) if 'MC' in dir() else 2.5
+    if score_total < min_score_modo:
         pred = 0
 
     # Mercado muerto = no operar
@@ -1027,6 +1077,8 @@ if 'loaded' not in st.session_state:
     st.session_state.capital        = sv.get('capital',1000.0)
     st.session_state.trade_style    = sv.get('trade_style','Day Trading')
     st.session_state.modo           = sv.get('modo','Oráculo 🏛️')
+    st.session_state.tema           = sv.get('tema','Mármol Griego')
+    st.session_state.risk_pct       = sv.get('risk_pct', 1.0)   # ← persiste
     st.session_state.chat_history   = []
     st.session_state.last_tg_update = sv.get('last_tg_update',0)
     st.session_state.loaded         = True
@@ -1041,8 +1093,7 @@ THEMES = {
     "Olimpo Oscuro":  {"primary":"#9B7FD4","secondary":"#6B4FA0","bg":"#060308","card":"#0d0614"},
     "Athena":         {"primary":"#7BAF9E","secondary":"#3D7A68","bg":"#030a08","card":"#06120f"},
 }
-if 'tema' not in st.session_state: st.session_state.tema = "Mármol Griego"
-T = THEMES.get(st.session_state.tema, THEMES["Mármol Griego"])
+T = THEMES.get(st.session_state.get('tema','Mármol Griego'), THEMES["Mármol Griego"])
 
 FRASES = [
     ("Warren Buffett","El mercado transfiere dinero del impaciente al paciente."),
@@ -1109,9 +1160,12 @@ h1,h2,h3,h4 {{ font-family:'Cinzel',serif !important; color:{T['primary']} !impo
 with st.sidebar:
     st.markdown(f'<div style="font-family:Cinzel,serif;color:{T["primary"]};letter-spacing:3px;text-align:center;">⚙ CONFIG</div>', unsafe_allow_html=True)
     st.markdown("---")
-    nuevo_tema = st.selectbox("🏛️ Estilo", list(THEMES.keys()), index=list(THEMES.keys()).index(st.session_state.tema))
-    if nuevo_tema != st.session_state.tema:
-        st.session_state.tema = nuevo_tema; st.rerun()
+    nuevo_tema = st.selectbox("🏛️ Estilo", list(THEMES.keys()),
+                               index=list(THEMES.keys()).index(st.session_state.get('tema','Mármol Griego')))
+    if nuevo_tema != st.session_state.get('tema','Mármol Griego'):
+        st.session_state.tema = nuevo_tema
+        sv = gh_load(); sv['tema'] = nuevo_tema; gh_save(sv)
+        st.rerun()
 
     nuevo_modo = st.selectbox("🎯 Modo", ["Oráculo 🏛️","Gladiador ⚔️"],
                                index=["Oráculo 🏛️","Gladiador ⚔️"].index(st.session_state.modo))
@@ -1122,14 +1176,20 @@ with st.sidebar:
         sv = gh_load(); sv['modo'] = nuevo_modo; gh_save(sv)
         send_tg(f"🏛️ *MIMI-AI* — Modo: *{nuevo_modo}*\n{MC['desc']}")
 
-    nuevo_estilo = st.selectbox("📊 Estilo", ["Scalping","Day Trading","Swing"],
+    nuevo_estilo = st.selectbox("📊 Estilo de Trading", ["Scalping","Day Trading","Swing"],
                                  index=["Scalping","Day Trading","Swing"].index(st.session_state.trade_style))
+    _sc_preview = STYLE_CONFIG.get(nuevo_estilo, {})
+    st.caption(_sc_preview.get('desc',''))
     if nuevo_estilo != st.session_state.trade_style:
         st.session_state.trade_style = nuevo_estilo
         sv = gh_load(); sv['trade_style'] = nuevo_estilo; gh_save(sv)
-        send_tg(f"🏛️ Estilo: *{nuevo_estilo}*")
+        send_tg(f"🏛️ Estilo: *{nuevo_estilo}* — {_sc_preview.get('desc','')}")
 
-    risk_pct = st.slider("⚠️ Riesgo/trade (%)", 0.5, 5.0, 1.0, 0.5)
+    risk_pct = st.slider("⚠️ Riesgo/trade (%)", 0.5, 5.0,
+                          float(st.session_state.get('risk_pct', 1.0)), 0.5)
+    if risk_pct != st.session_state.get('risk_pct', 1.0):
+        st.session_state.risk_pct = risk_pct
+        sv = gh_load(); sv['risk_pct'] = risk_pct; gh_save(sv)
     st.markdown("---")
 
     # ── MODO AUTOMÁTICO ───────────────────────────────────────────
@@ -1200,7 +1260,9 @@ if raw is None:
     st.warning("⚠️ Mercado cerrado — reabre domingo 6PM MX."); st.stop()
 
 df  = add_ind(raw.to_json(orient='split'))
-m_model, sc_model, features, df_trained = train_model(df.to_json(orient='split'), MC['umbral'])
+# Umbral viene del estilo de trading — scalping necesita umbral más bajo
+_umbral = SC.get('umbral', MC.get('umbral', 0.003))
+m_model, sc_model, features, df_trained = train_model(df.to_json(orient='split'), _umbral)
 smc     = detect_smc_advanced(df, lookback=50)
 wyckoff = run_wyckoff(df)
 
@@ -1217,10 +1279,16 @@ ema20 = float(df['EMA_20'].iloc[-1])
 ema50 = float(df['EMA_50'].iloc[-1])
 
 # Señal según modo
+# SL/TP viene del estilo de trading — cada estilo tiene su propio ATR
+_atr_sl = SC.get('atr_sl', MC['atr_sl'])
+_atr_tp = SC.get('atr_tp', MC['atr_tp'])
+
 if 'Gladiador' in st.session_state.modo:
-    pred, prob, _, _, sl_long, tp_long, sl_short, tp_short, scores = get_signal_gladiador(df_trained, smc, features, m_model, sc_model, MC['atr_sl'], MC['atr_tp'])
+    pred, prob, _, _, sl_long, tp_long, sl_short, tp_short, scores = get_signal_gladiador(
+        df_trained, smc, features, m_model, sc_model, _atr_sl, _atr_tp)
 else:
-    pred, prob, _, _, sl_long, tp_long, sl_short, tp_short, scores = get_signal_oraculo(df_trained, smc, features, m_model, sc_model, MC['atr_sl'], MC['atr_tp'])
+    pred, prob, _, _, sl_long, tp_long, sl_short, tp_short, scores = get_signal_oraculo(
+        df_trained, smc, features, m_model, sc_model, _atr_sl, _atr_tp)
 
 rr   = round(MC['atr_tp'] / MC['atr_sl'], 2)
 conf = max(prob) * 100
@@ -1273,9 +1341,16 @@ if not st.session_state.signal_history or st.session_state.signal_history[-1].ge
         'direccion':ET.get(pred),'confianza':f"{conf:.1f}%",'precio':precio,
         'sl':sl_r,'tp':tp_r,'rsi':round(rsi,1),'smc':smc['bias'],'resultado':'PENDIENTE'})
 
-sv2 = {'paper_trades':st.session_state.paper_trades,'signal_history':st.session_state.signal_history[-50:],
-       'capital':st.session_state.capital,'trade_style':st.session_state.trade_style,
-       'modo':st.session_state.modo,'last_tg_update':st.session_state.last_tg_update}
+sv2 = {
+    'paper_trades':   st.session_state.paper_trades,
+    'signal_history': st.session_state.signal_history[-50:],
+    'capital':        st.session_state.capital,
+    'trade_style':    st.session_state.trade_style,
+    'modo':           st.session_state.modo,
+    'tema':           st.session_state.get('tema','Mármol Griego'),
+    'risk_pct':       st.session_state.get('risk_pct', 1.0),
+    'last_tg_update': st.session_state.last_tg_update
+}
 gh_save(sv2)
 
 # ── GUARDAR SEÑAL EN GITHUB (para telegram_bot.py) ───────────────
