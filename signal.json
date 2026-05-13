@@ -1,12 +1,12 @@
 {
-  "id": "20260513224112",
+  "id": "20260513224149",
   "symbol": "XAUUSD",
   "action": "SELL",
-  "entry": 4698.59,
+  "entry": 4698.68,
   "sl": 4695.48,
   "tp": 4675.34,
   "confidence": 80.8,
   "smc_bias": "BAJISTA",
   "wyckoff_trend": "ALCISTA",
-  "timestamp": "2026-05-13T22:41:12.431474+00:00"
+  "timestamp": "2026-05-13T22:41:49.722689+00:00"
 }
