@@ -37,8 +37,10 @@ try:
     TWELVEDATA_KEY  = st.secrets.get("TWELVEDATA_KEY", "")
     NEWS_API_KEY    = st.secrets.get("NEWS_API_KEY", "")
     FINNHUB_KEY     = st.secrets.get("FINNHUB_KEY", "")
+    ANTHROPIC_KEY   = st.secrets.get("ANTHROPIC_KEY", "")
 except:
-    TG_TOKEN = TG_CHAT_ID = GH_TOKEN = GH_REPO = TWELVEDATA_KEY = NEWS_API_KEY = FINNHUB_KEY = ''
+    TG_TOKEN = TG_CHAT_ID = GH_TOKEN = GH_REPO = TWELVEDATA_KEY = ''
+    NEWS_API_KEY = FINNHUB_KEY = ANTHROPIC_KEY = ''
 
 # Import signal generator
 from signal_generator import build_signal, save_signal_github
@@ -2197,17 +2199,174 @@ with tab6:
         st.plotly_chart(fig,use_container_width=True)
         st.caption("Verde = OB Alcista · Rojo = OB Bajista · Azul turquesa = zona Wyckoff · Punteadas = EQH/EQL")
 
-# ── TAB 7: CHAT ───────────────────────────────────────────────────
+# ── TAB 7: CHAT — TrendSpider AI ─────────────────────────────────
 with tab7:
-    st.caption("💡 También por Telegram: entré · no · salgo · estado · señal · wyckoff · me quedo")
+    st.markdown(f"""
+<div style="font-family:'Cinzel',serif;color:{T['primary']};font-size:.8em;
+            letter-spacing:3px;margin-bottom:8px;">
+    TRENDSPIDER XAUUSD AI · Motor de análisis profesional
+</div>
+<div style="font-size:.75em;color:{T['primary']}77;margin-bottom:12px;">
+    Análisis multi-timeframe automático · Confluencia mínima 4 factores ·
+    Solo XAUUSD spot · Mismo formato que TrendSpider profesional
+</div>
+""", unsafe_allow_html=True)
+
+    # Contexto del mercado actual para pasar a la API
+    _ctx_precio = precio
+    _ctx_rsi    = rsi
+    _ctx_atr    = atr
+    _ctx_ema20  = ema20
+    _ctx_ema50  = ema50
+    _ctx_smc    = smc['bias']
+    _ctx_bos    = "SÍ" if smc['bos'] else "NO"
+    _ctx_ob     = len(smc['order_blocks'])
+    _ctx_fvg    = len(smc['fvg'])
+    _ctx_wy     = wyckoff['trend']
+    _ctx_señal  = ET.get(pred)
+    _ctx_conf   = conf
+    _ctx_score  = scores.get('total', 0)
+    _ctx_sl     = sl_long if pred >= 0 else sl_short
+    _ctx_tp     = tp_long if pred >= 0 else tp_short
+    _ctx_estilo = st.session_state.trade_style
+    _ctx_modo   = st.session_state.modo
+    _ctx_hora   = ahora.strftime('%H:%M')
+    _ctx_sesion = scores.get('razon_sesion','—')
+    _ctx_mercado= scores.get('razon_mercado','—')
+
+    SYSTEM_PROMPT = f"""Eres TrendSpider XAUUSD AI — motor de análisis técnico profesional para XAUUSD (Oro Spot).
+Actúas exactamente como TrendSpider: automatizado, preciso, visual, basado en confluencias altas.
+Nunca das opiniones vagas. Respondes como un motor de alertas profesional, no como un humano.
+
+DATOS EN TIEMPO REAL DE MIMI-AI (usa estos para tu análisis):
+- Precio actual    : ${_ctx_precio:,.2f}
+- Señal MIMI-AI    : {_ctx_señal} (confianza {_ctx_conf:.1f}% · score {_ctx_score:.1f}/10)
+- RSI 14           : {_ctx_rsi:.1f}
+- ATR 14           : {_ctx_atr:.2f}
+- EMA 20           : ${_ctx_ema20:,.2f}
+- EMA 50           : ${_ctx_ema50:,.2f}
+- SMC Bias         : {_ctx_smc}
+- BOS confirmado   : {_ctx_bos}
+- Order Blocks     : {_ctx_ob}
+- FVG detectados   : {_ctx_fvg}
+- Wyckoff trend    : {_ctx_wy}
+- SL sugerido      : ${_ctx_sl:,.2f}
+- TP sugerido      : ${_ctx_tp:,.2f}
+- Hora MX          : {_ctx_hora}
+- Sesión           : {_ctx_sesion}
+- Mercado          : {_ctx_mercado}
+- Estilo trading   : {_ctx_estilo} · {_ctx_modo}
+
+CAPACIDADES QUE SIEMPRE APLICAS:
+- Análisis Multi-Timeframe (M5, M15, H1, H4) basado en los datos anteriores
+- Auto Fibonacci de swings recientes
+- Detección de patrones: Double Top/Bottom, H&S, Triángulos, Flags, Wedges, B&R, OB, FVG
+- Análisis de velas: pinbar, engulfing, doji
+- Indicadores: EMA 9/21, SuperTrend (10,3), RSI 14, MACD, ATR 14
+- Correlación inversa con DXY
+- Prioridad sesiones Londres + Nueva York
+
+REGLAS ESTRICTAS:
+1. Solo das señal con CONFLUENCIA ALTA (mínimo 4 factores alineados)
+2. Si no hay setup claro → responde exactamente: "SIN SEÑAL VÁLIDA EN ESTE MOMENTO"
+3. Nunca predices sin confluencia. Sé conservador.
+4. Siempre incluye SL y TP basados en ATR o niveles estructurales.
+5. Sin emoticonos. Sin frases de relleno. Directo y estructurado.
+
+FORMATO OBLIGATORIO DE RESPUESTA:
+**DIRECCIÓN:** LONG / SHORT
+
+**Entrada:** [precio o rango]
+
+**Stop Loss:** [precio] | Distancia: X ATR
+
+**Take Profit:**
+- TP1: [precio] (RR 1:2)
+- TP2: [precio] (RR 1:3+)
+
+**Confluencia:**
+- MTFA: [estado M5, M15, H1, H4]
+- Estructura: [trendline, fib, pattern]
+- Indicadores: [estado]
+- Volumen/Momentum: [estado]
+
+**Probabilidad estimada:** Alta / Media
+
+**Riesgo recomendado:** Máximo 0.5-1% por trade
+
+**Notas:** (máximo 2 líneas)
+"""
+
+    def llamar_claude(historial: list, pregunta: str) -> str:
+        """Llama a Claude API con contexto de mercado en tiempo real."""
+        if not ANTHROPIC_KEY:
+            return "⚠️ Agrega ANTHROPIC_KEY en Streamlit Secrets para activar el análisis IA."
+        try:
+            mensajes = []
+            for m in historial[-6:]:  # últimos 6 mensajes de contexto
+                rol = "user" if m['role'] == 'user' else "assistant"
+                mensajes.append({"role": rol, "content": m['content']})
+            mensajes.append({"role": "user", "content": pregunta})
+
+            headers = {
+                "x-api-key":         ANTHROPIC_KEY,
+                "anthropic-version": "2023-06-01",
+                "content-type":      "application/json"
+            }
+            body = {
+                "model":      "claude-sonnet-4-20250514",
+                "max_tokens": 1000,
+                "system":     SYSTEM_PROMPT,
+                "messages":   mensajes
+            }
+            r = requests.post(
+                "https://api.anthropic.com/v1/messages",
+                headers=headers, json=body, timeout=30
+            )
+            if r.status_code == 200:
+                data = r.json()
+                return data['content'][0]['text']
+            else:
+                return f"Error API: {r.status_code} — {r.text[:200]}"
+        except Exception as e:
+            return f"Error de conexión: {e}"
+
+    # Botones de análisis rápido
+    st.markdown(f'<div style="font-family:Cinzel,serif;color:{T["primary"]}88;font-size:.72em;letter-spacing:2px;margin-bottom:8px;">ANÁLISIS RÁPIDO</div>', unsafe_allow_html=True)
+    col_b1, col_b2, col_b3, col_b4 = st.columns(4)
+
+    quick_prompt = None
+    if col_b1.button("📊 Analizar ahora", use_container_width=True):
+        quick_prompt = f"Analiza el mercado XAU/USD ahora mismo con el precio actual de ${precio:,.2f} y dame señal completa en tu formato."
+    if col_b2.button("🎯 ¿Entro o espero?", use_container_width=True):
+        quick_prompt = f"El precio está en ${precio:,.2f} y la señal es {ET.get(pred)}. ¿Entro ahora o espero mejor setup? Dame análisis completo."
+    if col_b3.button("🛡️ Gestión de riesgo", use_container_width=True):
+        quick_prompt = f"Con precio en ${precio:,.2f}, ATR {atr:.2f}, dame los niveles exactos de SL y TP para {st.session_state.trade_style} y calcula el tamaño de posición para 1% de riesgo."
+    if col_b4.button("📰 ¿Qué esperar hoy?", use_container_width=True):
+        quick_prompt = f"Son las {ahora.strftime('%H:%M')} MX. Sesión: {scores.get('razon_sesion','—')}. Dame tu outlook para XAU/USD en las próximas 4 horas."
+
+    # Historial de chat
     for msg in st.session_state.chat_history:
-        with st.chat_message("user" if msg['role']=='user' else "assistant"):
+        with st.chat_message("user" if msg['role'] == 'user' else "assistant"):
             st.markdown(msg['content'])
-    uin = st.chat_input("Consulta al Oráculo...")
-    if uin:
-        resp = analizar_texto_libre(uin,precio,pred,prob,rsi,atr,smc,ET,conf,sl_long,tp_long,sl_short,tp_short,rr,wyckoff)
-        st.session_state.chat_history.append({'role':'user','content':uin})
+
+    # Input manual
+    uin = st.chat_input("Consulta a TrendSpider AI... (ej: ¿hay señal ahora? ¿qué dice el H4?)")
+
+    # Procesar input (botón o texto)
+    _pregunta = quick_prompt or uin
+    if _pregunta:
+        st.session_state.chat_history.append({'role':'user','content':_pregunta})
+        with st.chat_message("user"):
+            st.markdown(_pregunta)
+        with st.chat_message("assistant"):
+            with st.spinner("TrendSpider AI analizando..."):
+                resp = llamar_claude(st.session_state.chat_history[:-1], _pregunta)
+            st.markdown(resp)
         st.session_state.chat_history.append({'role':'mimi','content':resp})
+        # Mandar análisis a Telegram si modo auto ON
+        if st.session_state.get('auto_mode', False) and _pregunta == quick_prompt:
+            send_tg(f"🤖 *TrendSpider AI*\n{resp[:800]}")
         st.rerun()
 
 # ── TAB 8: BACKTEST ───────────────────────────────────────────────
