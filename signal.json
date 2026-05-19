@@ -1,12 +1,12 @@
 {
-  "id": "20260519202500",
+  "id": "20260519202529",
   "symbol": "XAUUSD",
   "action": "BUY",
-  "entry": 4487.12,
+  "entry": 4487.32,
   "sl": 4491.28,
   "tp": 4529.29,
   "confidence": 54.18,
   "smc_bias": "BAJISTA",
   "wyckoff_trend": "BAJISTA",
-  "timestamp": "2026-05-19T20:25:00.404165+00:00"
+  "timestamp": "2026-05-19T20:25:29.786618+00:00"
 }
