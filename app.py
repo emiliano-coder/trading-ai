@@ -26,9 +26,9 @@ warnings.filterwarnings('ignore')
 
 st.set_page_config(page_title="MIMI-AI", page_icon="🏛️", layout="wide")
 
-# ── AUTO REFRESH — precio cada 3s, todo lo demás cacheado ────────
+# ── AUTO REFRESH — precio cada 30s, todo lo demás cacheado ───────
 if HAS_AUTOREFRESH:
-    st_autorefresh(interval=3000, limit=None, key="price_tick")
+    st_autorefresh(interval=30000, limit=None, key="price_tick")
 
 # ── SECRETS ──────────────────────────────────────────────────────
 try:
@@ -83,7 +83,7 @@ def pf(x, par):
         return str(x)
 
 # ── PRECIO EN VIVO — dual source, sin bloquear el modelo ────────
-@st.cache_data(ttl=3)
+@st.cache_data(ttl=15)
 def get_precio_vivo(td_symbol, yf_symbol):
     try:
         td_key = st.secrets.get("TWELVEDATA_KEY", "")
