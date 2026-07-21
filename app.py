@@ -13,18 +13,15 @@ import json
 import base64
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-try:
-    from streamlit_autorefresh import st_autorefresh
-    HAS_AUTOREFRESH = True
-except:
-    HAS_AUTOREFRESH = False
 warnings.filterwarnings('ignore')
 
 st.set_page_config(page_title="MIMI-AI", page_icon="🏛️", layout="wide")
 
-# ── AUTO REFRESH — precio cada 30s ────────────────────────────────
-if HAS_AUTOREFRESH:
-    st_autorefresh(interval=30000, limit=None, key="price_tick")
+# ── FRAGMENT — permite refrescar SOLO el precio, sin recargar la app entera
+try:
+    fragment_decorator = st.fragment
+except AttributeError:
+    fragment_decorator = st.experimental_fragment
 
 # ── SECRETS ──────────────────────────────────────────────────────
 try:
@@ -648,40 +645,46 @@ st.markdown(f"""
 <div class="greek-orn">── ✦ ── ✦ ── ✦ ──</div>
 """, unsafe_allow_html=True)
 
-# ── PRECIO EN VIVO ───────────────────────────────────────────────
-tick = get_precio_vivo(PC['td_symbol'], PC['yf_symbol'])
-precio_display = tick['precio'] if tick else precio
-cambio_display = tick['cambio'] if tick else 0
-cambio_pct_display = tick['cambio_pct'] if tick else 0
-hora_display = tick['hora'][11:16] if tick else "—"
-precio_color = '#4CAF82' if cambio_display >= 0 else '#C0392B'
-flecha = '▲' if cambio_display >= 0 else '▼'
+# ── PRECIO EN VIVO — se actualiza solo cada 3s, SIN recargar la app ──
+@fragment_decorator(run_every=3)
+def precios_en_vivo(par_activo):
+    cols = st.columns(2)
+    for i, par_key in enumerate(PAIRS.keys()):
+        pc_i = PAIRS[par_key]
+        tk = get_precio_vivo(pc_i['td_symbol'], pc_i['yf_symbol'])
+        p_d   = tk['precio'] if tk else None
+        c_d   = tk['cambio'] if tk else 0
+        cp_d  = tk['cambio_pct'] if tk else 0
+        hora_d = tk['hora'][11:16] if tk else "—"
+        color = '#4CAF82' if c_d >= 0 else '#C0392B'
+        flecha = '▲' if c_d >= 0 else '▼'
+        activo_tag = " ⭐ ANALIZANDO" if par_key == par_activo else ""
+        with cols[i]:
+            if tk:
+                st.markdown(f"""
+                <div style="background:linear-gradient(90deg,{T['card']},{T['bg']},{T['card']});
+                  border:1px solid {color}44;border-radius:4px;padding:12px 16px;margin:4px 0;">
+                  <span style="font-family:'Cinzel',serif;color:{T['primary']}88;font-size:.72em;letter-spacing:2px;">{par_key} · EN VIVO · {hora_d}{activo_tag}</span><br>
+                  <span style="font-family:'Cinzel',serif;font-size:clamp(1.2rem,3.5vw,1.9rem);font-weight:900;color:{color};
+                    filter:drop-shadow(0 0 10px {color}66);">{pf(p_d,par_key)}</span>
+                  <span style="font-family:'Philosopher',serif;color:{color};font-size:.9em;margin-left:10px;">
+                    {flecha} {pf(abs(c_d),par_key)} ({cp_d:+.3f}%)
+                  </span>
+                  <div style="font-family:'Philosopher',serif;color:{T['primary']}77;font-size:.72em;margin-top:2px;">{tk['fuente']}</div>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.info(f"Sin datos en vivo — {par_key}")
 
-st.markdown(f"""
-<div style="background:linear-gradient(90deg,{T['card']},{T['bg']},{T['card']});
-  border:1px solid {precio_color}44;border-radius:4px;padding:12px 20px;
-  margin:8px 0;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;">
-  <div>
-    <span style="font-family:'Cinzel',serif;color:{T['primary']}88;font-size:.75em;letter-spacing:3px;">{PAR} · EN VIVO · {hora_display}</span><br>
-    <span style="font-family:'Cinzel',serif;font-size:clamp(1.4rem,4vw,2.2rem);font-weight:900;color:{precio_color};
-      filter:drop-shadow(0 0 12px {precio_color}66);">{pf(precio_display,PAR)}</span>
-    <span style="font-family:'Philosopher',serif;color:{precio_color};font-size:1em;margin-left:12px;">
-      {flecha} {pf(abs(cambio_display),PAR)} ({cambio_pct_display:+.3f}%)
-    </span>
-  </div>
-  <div style="text-align:right;font-family:'Philosopher',serif;color:{T['primary']}88;font-size:.82em;line-height:1.8;">
-    {STF['label']} · Riesgo {risk_pct}% · Auto-refresh 30s · {tick['fuente'] if tick else '—'}
-  </div>
-</div>
-""", unsafe_allow_html=True)
+precios_en_vivo(PAR)
 
 c1,c2,c3,c4,c5,c6 = st.columns(6)
-c1.metric("💰 Precio Vivo", pf(precio_display,PAR), f"{pf(cambio_display,PAR)} ({cambio_pct_display:+.3f}%)")
-c2.metric("📈 Tendencia", senal['tendencia'])
-c3.metric("🎯 Señal","LONG" if pred==1 else "SHORT" if pred==-1 else "ESPERA")
-c4.metric("⭐ Score", f"{score['total']}%", score['categoria'].split(' ')[0])
-c5.metric("📐 R:R", f"1:{rr_actual:.2f}" if rr_actual else "—")
-c6.metric("💰 Capital", f"${st.session_state.capital:,.2f}")
+c1.metric("📈 Tendencia", senal['tendencia'])
+c2.metric("🎯 Señal","LONG" if pred==1 else "SHORT" if pred==-1 else "ESPERA")
+c3.metric("⭐ Score", f"{score['total']}%", score['categoria'].split(' ')[0])
+c4.metric("📐 R:R", f"1:{rr_actual:.2f}" if rr_actual else "—")
+c5.metric("💰 Capital", f"${st.session_state.capital:,.2f}")
+c6.metric("⏱️ Timeframes", STF['label'])
 st.markdown('<div class="greek-orn">── ✦ ──</div>', unsafe_allow_html=True)
 
 # ── TABS ──────────────────────────────────────────────────────────
