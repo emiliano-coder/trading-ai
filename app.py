@@ -43,7 +43,7 @@ PAIRS = {
         "yf_symbol": "GC=F", "td_symbol": "XAU/USD",
         "dxy_symbol": "DX-Y.NYB", "contract_size": 100, "decimales": 2,
         "ema_trend": (50, 200), "ema_entry": 20,
-        "sl_atr_mult": 1.5, "tp_rr": 2.5,
+        "sl_atr_mult": 1.5, "tp_rr": 2.5, "tp2_rr": 4.0,
         "usa_fib": False, "usa_ib": True,
     },
     "EUR/USD 💶": {
@@ -51,7 +51,7 @@ PAIRS = {
         "yf_symbol": "EURUSD=X", "td_symbol": "EUR/USD",
         "dxy_symbol": "DX-Y.NYB", "contract_size": 100000, "decimales": 5,
         "ema_trend": (20, 200), "ema_entry": 20,
-        "sl_atr_mult": 1.2, "tp_rr": 2.0,
+        "sl_atr_mult": 1.2, "tp_rr": 2.0, "tp2_rr": 3.5,
         "usa_fib": True, "usa_ib": False,
     }
 }
@@ -159,6 +159,7 @@ def cargar_estado_par(par):
     st.session_state.trade_style     = sv.get('trade_style', 'Day Trading')
     st.session_state.estrategia_xau  = sv.get('estrategia_xau', 'Trend + Pullback (EMA)')
     st.session_state.last_tg_update  = sv.get('last_tg_update', 0)
+    st.session_state.last_entry_alert = sv.get('last_entry_alert', {})
     st.session_state.loaded_par      = par
 
 if 'loaded_par' not in st.session_state or st.session_state.loaded_par != st.session_state.par:
@@ -316,21 +317,24 @@ def generar_senal(par, df_trend, df_entry, usar_ib=False):
                 if patron: razon.append(f"Confirmación: {patron}")
                 if estructura: razon.append("Ruptura de microestructura a favor")
 
-    sl_mult = cfg['sl_atr_mult']; tp_rr = cfg['tp_rr']
+    sl_mult = cfg['sl_atr_mult']; tp_rr = cfg['tp_rr']; tp2_rr = cfg['tp2_rr']
     if direccion == 1:
         swing_ref = float(df_entry['Low'].iloc[-8:].min())
         sl = min(swing_ref, precio - atr*sl_mult)
         tp = precio + (precio - sl) * tp_rr
+        tp2 = precio + (precio - sl) * tp2_rr
     elif direccion == -1:
         swing_ref = float(df_entry['High'].iloc[-8:].max())
         sl = max(swing_ref, precio + atr*sl_mult)
         tp = precio - (sl - precio) * tp_rr
+        tp2 = precio - (sl - precio) * tp2_rr
     else:
         sl = precio - atr*sl_mult
         tp = precio + atr*sl_mult*tp_rr
+        tp2 = precio + atr*sl_mult*tp2_rr
 
     return {
-        'direccion':direccion,'precio':precio,'sl':round(sl,6),'tp':round(tp,6),
+        'direccion':direccion,'precio':precio,'sl':round(sl,6),'tp':round(tp,6),'tp2':round(tp2,6),
         'tendencia':tendencia,'pullback':en_pb,'ema_ref':ema_ref,'patron':patron,
         'estructura':estructura,'atr':atr,'razon':razon,'fib':fib,
         'en_fib_long':en_fib_long,'en_fib_short':en_fib_short,'ib':ib
@@ -411,10 +415,12 @@ def process_tg_updates(par, senal, score, risk_pct, contract_size):
                 lot, risg = calc_pos(st.session_state.capital, risk_pct, precio, senal['sl'], contract_size)
                 st.session_state.paper_trades.append({
                     'id':len(st.session_state.paper_trades)+1,'par':par,
-                    'dir':'LONG 📈' if pred==1 else 'SHORT 📉','entrada':precio,'sl':senal['sl'],'tp':senal['tp'],
+                    'dir':'LONG 📈' if pred==1 else 'SHORT 📉','entrada':precio,'sl':senal['sl'],
+                    'tp':senal['tp'],'tp1':senal['tp'],'tp2':senal.get('tp2',senal['tp']),
+                    'tp1_hit':False,'sl_warned':False,'sl_dist':abs(precio-senal['sl']),'last_followup_ts':_ahora_ts(),
                     'lotes':lot,'riesgo':risg,'estado':'ABIERTO','fecha':ah.strftime('%d/%m %H:%M'),
                     'resultado':'PENDIENTE','pnl':0,'score':score['total']})
-                send_tg(f"✅ *Trade registrado — {tag}*\n{'LONG 📈' if pred==1 else 'SHORT 📉'} @ {pf(precio,par)}\nSL: {pf(senal['sl'],par)} | TP: {pf(senal['tp'],par)}\nScore: {score['total']}%\nLotes: {lot} | Riesgo: ${risg:.2f}")
+                send_tg(f"✅ *Trade registrado — {tag}*\n{'LONG 📈' if pred==1 else 'SHORT 📉'} @ {pf(precio,par)}\nSL: {pf(senal['sl'],par)} | TP1: {pf(senal['tp'],par)} | TP2: {pf(senal.get('tp2',senal['tp']),par)}\nScore: {score['total']}%\nLotes: {lot} | Riesgo: ${risg:.2f}")
             elif ot: send_tg("⚠️ Ya tienes un trade abierto en este par.")
             else: send_tg("⚠️ No hay setup claro ahorita. Espera confirmación.")
         elif cmd == 'NO_ENTRO':
@@ -481,6 +487,141 @@ h1,h2,h3,h4 {{ font-family:'Cinzel',serif !important; color:{T['primary']} !impo
     font-family:'Cinzel',serif; font-size:.75em; font-weight:700; line-height:22px; }}
 </style>
 """, unsafe_allow_html=True)
+
+# ══════════════════════════════════════════════════════════════════
+#  MOTOR DE NOTIFICACIONES AUTOMÁTICAS — Telegram
+#  - Señal nueva (score >= 60%): entrada, SL, TP1, TP2, RR, calidad, razón
+#  - Seguimiento cada 40 min mientras hay operación abierta
+#  - TP1 (parcial + SL a breakeven), TP2 (cierre total), SL alcanzado
+#  - Aviso si el precio está a menos del 30% de distancia al SL
+#  NOTA: esto corre mientras la pestaña del navegador esté abierta —
+#  Streamlit no tiene un proceso en segundo plano 24/7 sin la página abierta.
+# ══════════════════════════════════════════════════════════════════
+def _ahora_ts():
+    return datetime.now(pytz.timezone('America/Mexico_City')).timestamp()
+
+def evaluar_y_notificar_par(par, es_par_activo, stf_usar):
+    pc = PAIRS[par]
+    df_t = get_data(pc['yf_symbol'], stf_usar['trend_interval'], stf_usar['trend_period'])
+    df_e = get_data(pc['yf_symbol'], stf_usar['entry_interval'], stf_usar['entry_period'])
+    if df_t is None or df_e is None:
+        return
+
+    usar_ib_local = pc['usa_ib'] and par == "XAU/USD 🥇" and st.session_state.get('estrategia_xau','') == "Initial Balance Breakout (NY Open)"
+    sen = generar_senal(par, df_t, df_e, usar_ib=usar_ib_local)
+    dxy_r = get_dxy_returns()
+    dxy_ok = False
+    if dxy_r is not None:
+        dxy_ok = (sen['direccion']==1 and dxy_r<0) or (sen['direccion']==-1 and dxy_r>0)
+    rr_ = abs(sen['tp']-sen['precio'])/abs(sen['precio']-sen['sl']) if sen['sl']!=sen['precio'] else 0
+    sc_ = calcular_score(sen, dxy_ok, False, rr_)
+
+    if es_par_activo:
+        sv = {'paper_trades':st.session_state.paper_trades,'signal_history':st.session_state.signal_history,
+              'capital':st.session_state.capital,'trade_style':st.session_state.trade_style,
+              'estrategia_xau':st.session_state.estrategia_xau,'last_tg_update':st.session_state.last_tg_update,
+              'last_entry_alert':st.session_state.get('last_entry_alert', {})}
+    else:
+        sv = gh_load(par)
+
+    trades = sv.get('paper_trades', [])
+    abiertos = [t for t in trades if t['estado']=='ABIERTO']
+    ahora_ts = _ahora_ts()
+    tag = par.split()[0]
+    cambios = False
+
+    # 1) ALERTA DE ENTRADA — solo si no hay trade abierto y el score cumple mínimo
+    if not abiertos and sen['direccion'] != 0 and sc_['total'] >= 60:
+        last_alert = sv.get('last_entry_alert', {})
+        mismo_setup_reciente = last_alert.get('direccion') == sen['direccion'] and (ahora_ts - last_alert.get('ts', 0)) < 3600
+        if not mismo_setup_reciente:
+            dir_txt = "Compra" if sen['direccion']==1 else "Venta"
+            emoji = "🟢" if sen['direccion']==1 else "🔴"
+            razon_txt = " · ".join(sen['razon'][:2]) if sen['razon'] else "Setup técnico confirmado"
+            send_tg(f"{emoji} *SEÑAL {tag}*\n"
+                    f"Dirección: {dir_txt}\n"
+                    f"Precio de entrada: {pf(sen['precio'],par)}\n"
+                    f"Stop Loss: {pf(sen['sl'],par)}\n"
+                    f"Take Profit 1: {pf(sen['tp'],par)}\n"
+                    f"Take Profit 2: {pf(sen['tp2'],par)}\n"
+                    f"Ratio RR: 1:{rr_:.1f}\n"
+                    f"Calidad: {sc_['total']}%\n"
+                    f"Razón: {razon_txt}")
+            sv['last_entry_alert'] = {'direccion': sen['direccion'], 'ts': ahora_ts}
+            if es_par_activo: st.session_state.last_entry_alert = sv['last_entry_alert']
+            cambios = True
+
+    # 2) SEGUIMIENTO / TP1 / TP2 / SL de posiciones abiertas de este par
+    precio_t = sen['precio']
+    for t in abiertos:
+        if t.get('par') != par: continue
+        dirlong = 'LONG' in t['dir']
+        pnl = (precio_t - t['entrada']) * (1 if dirlong else -1) * t['lotes'] * pc['contract_size']
+        t.setdefault('tp1', t.get('tp'))
+        t.setdefault('tp2', t.get('tp'))
+        t.setdefault('tp1_hit', False)
+        t.setdefault('sl_warned', False)
+        t.setdefault('sl_dist', abs(t['entrada']-t['sl']))
+        t.setdefault('last_followup_ts', ahora_ts)
+
+        tocó_tp1 = (dirlong and precio_t >= t['tp1']) or (not dirlong and precio_t <= t['tp1'])
+        if tocó_tp1 and not t['tp1_hit']:
+            t['tp1_hit'] = True
+            t['sl'] = t['entrada']
+            send_tg(f"🎯 *TP1 ALCANZADO — {tag}*\nParcial ganado ✅\nSL movido a breakeven ({pf(t['entrada'],par)}).\nSigue corriendo hacia TP2: {pf(t['tp2'],par)}")
+            cambios = True
+
+        tocó_tp2 = (dirlong and precio_t >= t['tp2']) or (not dirlong and precio_t <= t['tp2'])
+        tocó_sl  = (dirlong and precio_t <= t['sl']) or (not dirlong and precio_t >= t['sl'])
+        if tocó_tp2:
+            pnl_final = (t['tp2']-t['entrada'])*t['lotes']*pc['contract_size'] if dirlong else (t['entrada']-t['tp2'])*t['lotes']*pc['contract_size']
+            t['estado']='CERRADO'; t['pnl']=round(pnl_final,2); t['resultado']='WIN ✅'
+            send_tg(f"🏁 *TP2 ALCANZADO — {tag}* 🟢\nOperación cerrada en {pf(t['tp2'],par)}\nP&L total: +${t['pnl']:.2f}")
+            cambios = True
+        elif tocó_sl:
+            pnl_final = (t['sl']-t['entrada'])*t['lotes']*pc['contract_size'] if dirlong else (t['entrada']-t['sl'])*t['lotes']*pc['contract_size']
+            t['estado']='CERRADO'; t['pnl']=round(pnl_final,2)
+            t['resultado']='WIN ✅' if pnl_final>0 else 'LOSS ❌'
+            send_tg(f"🛑 *SL ALCANZADO — {tag}*{' (breakeven, parcial ya asegurado)' if t['tp1_hit'] else ''}\nOperación cerrada en {pf(t['sl'],par)}\nP&L: {'+' if pnl_final>0 else ''}${pnl_final:.2f}")
+            cambios = True
+        else:
+            dist_sl = abs(precio_t - t['sl'])
+            if t['sl_dist'] > 0 and (dist_sl / t['sl_dist']) < 0.30 and not t['sl_warned']:
+                send_tg(f"⚠️ *CERCA DEL SL — {tag}*\nPrecio actual: {pf(precio_t,par)}\nSL: {pf(t['sl'],par)}\nQueda menos del 30% de la distancia original de riesgo.")
+                t['sl_warned'] = True
+                cambios = True
+
+            minutos_desde_followup = (ahora_ts - t['last_followup_ts']) / 60
+            if minutos_desde_followup >= 40:
+                dist_tp = abs(t['tp1']-precio_t)
+                pct = pnl / (t['entrada']*t['lotes']*pc['contract_size']) * 100 if t['entrada'] else 0
+                recomendacion = "Mover SL a breakeven" if (pnl>0 and not t['tp1_hit']) else "Mantener"
+                send_tg(f"📊 *ACTUALIZACIÓN {tag}*\n"
+                        f"Dirección: {'Compra' if dirlong else 'Venta'} @ {pf(t['entrada'],par)}\n"
+                        f"Precio actual: {pf(precio_t,par)}\n"
+                        f"P&L: {'+' if pnl>0 else ''}${pnl:.2f} ({pct:+.2f}%)\n"
+                        f"Distancia a TP1: {dist_tp:.5f}\n"
+                        f"Distancia a SL: {dist_sl:.5f}\n"
+                        f"Recomendación: {recomendacion}")
+                t['last_followup_ts'] = ahora_ts
+                cambios = True
+
+    if cambios:
+        sv['paper_trades'] = trades
+        sv['capital'] = round(1000.0 + sum(x.get('pnl',0) for x in trades if x['estado']=='CERRADO'), 2)
+        if es_par_activo:
+            st.session_state.paper_trades = trades
+            st.session_state.capital = sv['capital']
+        gh_save(par, sv)
+
+@fragment_decorator(run_every=60)
+def monitor_automatico(par_seleccionado, stf_activo):
+    for par_k in PAIRS.keys():
+        try:
+            stf_usar = stf_activo if par_k == par_seleccionado else STYLE_TF['Day Trading']
+            evaluar_y_notificar_par(par_k, par_k == par_seleccionado, stf_usar)
+        except Exception:
+            pass
 
 # ── SIDEBAR ───────────────────────────────────────────────────────
 with st.sidebar:
@@ -600,36 +741,23 @@ mx_tz = pytz.timezone('America/Mexico_City'); ahora = datetime.now(mx_tz); h = a
 
 process_tg_updates(PAR, senal, score, risk_pct, CONTRACT)
 
-# ── AUTO PAPER TRADE RESULT ────────────────────────────────────────
-for t in st.session_state.paper_trades:
-    if t['estado'] == 'ABIERTO':
-        if 'LONG' in t['dir']:
-            if precio >= t['tp']:
-                t['estado']='CERRADO'; t['pnl']=round((t['tp']-t['entrada'])*t['lotes']*CONTRACT,2); t['resultado']='WIN ✅'
-                send_tg(f"🏛️ TP alcanzado 🟢 — {PAR}\nLONG cerrado @ {pf(precio,PAR)}\nP&L: +${t['pnl']:.2f}")
-            elif precio <= t['sl']:
-                t['estado']='CERRADO'; t['pnl']=round((t['sl']-t['entrada'])*t['lotes']*CONTRACT,2); t['resultado']='LOSS ❌'
-                send_tg(f"🏛️ SL alcanzado 🔴 — {PAR}\nLONG cerrado @ {pf(precio,PAR)}\nP&L: ${t['pnl']:.2f}")
-        elif 'SHORT' in t['dir']:
-            if precio <= t['tp']:
-                t['estado']='CERRADO'; t['pnl']=round((t['entrada']-t['tp'])*t['lotes']*CONTRACT,2); t['resultado']='WIN ✅'
-                send_tg(f"🏛️ TP alcanzado 🟢 — {PAR}\nSHORT cerrado @ {pf(precio,PAR)}\nP&L: +${t['pnl']:.2f}")
-            elif precio >= t['sl']:
-                t['estado']='CERRADO'; t['pnl']=round((t['entrada']-t['sl'])*t['lotes']*CONTRACT,2); t['resultado']='LOSS ❌'
-                send_tg(f"🏛️ SL alcanzado 🔴 — {PAR}\nSHORT cerrado @ {pf(precio,PAR)}\nP&L: ${t['pnl']:.2f}")
-
-cap = 1000.0 + sum(t.get('pnl',0) for t in st.session_state.paper_trades if t['estado']=='CERRADO')
-st.session_state.capital = round(cap, 2)
+# ── MONITOR AUTOMÁTICO — entrada, seguimiento, TP1/TP2/SL, cerca-de-SL ──
+# corre también aquí en el rerun completo (por si el fragmento aún no dispara)
+try:
+    evaluar_y_notificar_par(PAR, True, STF)
+except Exception:
+    pass
 
 if not st.session_state.signal_history or st.session_state.signal_history[-1].get('precio') != precio:
     st.session_state.signal_history.append({
         'id':len(st.session_state.signal_history)+1,'fecha':ahora.strftime('%d/%m %H:%M'),'par':PAR,
         'estilo':st.session_state.trade_style,'direccion':ET.get(pred),'score':score['total'],
-        'precio':precio,'sl':senal['sl'],'tp':senal['tp'],'tendencia':senal['tendencia'],'resultado':'PENDIENTE'})
+        'precio':precio,'sl':senal['sl'],'tp':senal['tp'],'tp2':senal['tp2'],'tendencia':senal['tendencia'],'resultado':'PENDIENTE'})
 
 sv2 = {'paper_trades':st.session_state.paper_trades,'signal_history':st.session_state.signal_history[-50:],
        'capital':st.session_state.capital,'trade_style':st.session_state.trade_style,
-       'estrategia_xau':st.session_state.estrategia_xau,'last_tg_update':st.session_state.last_tg_update}
+       'estrategia_xau':st.session_state.estrategia_xau,'last_tg_update':st.session_state.last_tg_update,
+       'last_entry_alert':st.session_state.get('last_entry_alert', {})}
 gh_save(PAR, sv2)
 
 # ── BANNER ────────────────────────────────────────────────────────
@@ -677,6 +805,7 @@ def precios_en_vivo(par_activo):
                 st.info(f"Sin datos en vivo — {par_key}")
 
 precios_en_vivo(PAR)
+monitor_automatico(PAR, STF)
 
 c1,c2,c3,c4,c5,c6 = st.columns(6)
 c1.metric("📈 Tendencia", senal['tendencia'])
@@ -706,7 +835,8 @@ with tab1:
             st.markdown("Sin confluencia de tendencia + pullback + confirmación todavía. El estoico espera.")
         if pred != 0:
             st.markdown(f"**Stop Loss 🔴:** {pf(senal['sl'],PAR)}")
-            st.markdown(f"**Take Profit 🟢:** {pf(senal['tp'],PAR)}  (R:R 1:{rr_actual:.2f})")
+            st.markdown(f"**Take Profit 1 🟢:** {pf(senal['tp'],PAR)}  (R:R 1:{rr_actual:.2f})")
+            st.markdown(f"**Take Profit 2 🟢🟢:** {pf(senal['tp2'],PAR)}")
         lot, risg = calc_pos(st.session_state.capital, risk_pct, precio, senal['sl'] if senal['sl']!=precio else precio-senal['atr'], CONTRACT)
         st.markdown(f"**Lotes sugeridos:** {lot}  |  **Riesgo:** ${risg:.2f} ({risk_pct}%)")
         st.markdown('</div>', unsafe_allow_html=True)
@@ -730,10 +860,12 @@ with tab1:
                 lot2, risg2 = calc_pos(st.session_state.capital, risk_pct, precio, senal['sl'], CONTRACT)
                 st.session_state.paper_trades.append({
                     'id':len(st.session_state.paper_trades)+1,'par':PAR,
-                    'dir':'LONG 📈' if pred==1 else 'SHORT 📉','entrada':precio,'sl':senal['sl'],'tp':senal['tp'],
+                    'dir':'LONG 📈' if pred==1 else 'SHORT 📉','entrada':precio,'sl':senal['sl'],
+                    'tp':senal['tp'],'tp1':senal['tp'],'tp2':senal['tp2'],
+                    'tp1_hit':False,'sl_warned':False,'sl_dist':abs(precio-senal['sl']),'last_followup_ts':_ahora_ts(),
                     'lotes':lot2,'riesgo':risg2,'estado':'ABIERTO','fecha':ahora.strftime('%d/%m %H:%M'),
                     'resultado':'PENDIENTE','pnl':0,'score':score['total']})
-                send_tg(f"🏛️ *Trade abierto — {PAR}*\n{'LONG 📈' if pred==1 else 'SHORT 📉'} @ {pf(precio,PAR)}\nSL: {pf(senal['sl'],PAR)} | TP: {pf(senal['tp'],PAR)}\nScore: {score['total']}%")
+                send_tg(f"🟢 *SEÑAL {PAR.split()[0]}*\nDirección: {'Compra' if pred==1 else 'Venta'}\nPrecio de entrada: {pf(precio,PAR)}\nStop Loss: {pf(senal['sl'],PAR)}\nTake Profit 1: {pf(senal['tp'],PAR)}\nTake Profit 2: {pf(senal['tp2'],PAR)}\nRatio RR: 1:{rr_actual:.1f}\nCalidad: {score['total']}%\nRazón: {' · '.join(senal['razon'][:2]) if senal['razon'] else 'Entrada manual'}")
                 gh_save(PAR, {**sv2,'paper_trades':st.session_state.paper_trades}); st.success("Trade registrado ✅"); st.rerun()
             elif ot: st.warning("Ya tienes un trade abierto en este par.")
             else: st.warning("No hay setup claro ahorita.")
@@ -849,6 +981,7 @@ with tab4:
         st.markdown(f"P&L: **${pnl:.2f}** | SL: {pf(t['sl'],PAR)} | TP: {pf(t['tp'],PAR)} | Lotes: {t['lotes']}")
         if st.button("Cerrar manualmente"):
             t['estado']='CERRADO'; t['pnl']=round(pnl,2); t['resultado']='WIN ✅' if pnl>0 else 'LOSS ❌'
+            send_tg(f"✋ *ORDEN CERRADA MANUALMENTE — {PAR.split()[0]}*\n{t['dir']} @ {pf(t['entrada'],PAR)}\nCierre: {pf(precio,PAR)}\nP&L: {'+' if pnl>0 else ''}${pnl:.2f}")
             gh_save(PAR, {**sv2,'paper_trades':st.session_state.paper_trades,'capital':st.session_state.capital}); st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
     else:
