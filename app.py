@@ -64,6 +64,28 @@ STYLE_TF = {
 
 NOTICIAS_ALTO_IMPACTO = ["FOMC", "NFP (Nóminas no agrícolas)", "Decisión de tasas ECB", "CPI / Inflación", "Discurso de la Fed"]
 
+PIP_SIZE = {"XAU/USD 🥇": 0.1, "EUR/USD 💶": 0.0001}
+SCORE_MIN_ALERTA = 58
+SCORE_MIN_ASIA = 80  # en sesión asiática solo se avisa si es MUY clara
+
+def es_sesion_asiatica(hora_mx):
+    return hora_mx in (19,20,21,22,23,0,1,2)
+
+def a_pips(dist_precio, par):
+    return dist_precio / PIP_SIZE.get(par, 0.0001)
+
+def generar_escenarios(par, sen, df_entry, lookback=20):
+    precio_ = sen['precio']; atr_ = sen['atr']
+    resistencia = float(df_entry['High'].iloc[-lookback:].max())
+    soporte     = float(df_entry['Low'].iloc[-lookback:].min())
+    obj_arriba  = resistencia + atr_*2
+    obj_abajo   = soporte - atr_*2
+    return [
+        f"Si rompe {pf(resistencia,par)} con fuerza → probable continuación hasta {pf(obj_arriba,par)}",
+        f"Si rechaza en {pf(resistencia,par)} → posible retroceso hacia {pf(soporte,par)}",
+        "Zona actual clave — esperar confirmación de ruptura o rechazo antes de decidir",
+    ]
+
 def pdec(par): return PAIRS[par]["decimales"]
 def pf(x, par):
     try: return f"{x:,.{pdec(par)}f}"
@@ -489,16 +511,28 @@ h1,h2,h3,h4 {{ font-family:'Cinzel',serif !important; color:{T['primary']} !impo
 """, unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════════
-#  MOTOR DE NOTIFICACIONES AUTOMÁTICAS — Telegram
-#  - Señal nueva (score >= 60%): entrada, SL, TP1, TP2, RR, calidad, razón
-#  - Seguimiento cada 40 min mientras hay operación abierta
+#  MOTOR DE NOTIFICACIONES AUTOMÁTICAS — App (toast) + Telegram
+#  - Señal nueva (score >= 58%, o >=80% en sesión asiática): entrada,
+#    SL, TP1, TP2, RR, calidad, razón + 2-3 escenarios
+#  - Seguimiento cada 40 min (dentro de la ventana 30-60 pedida) con
+#    escenarios y recomendación justificada (mantener/breakeven/parcial/salir)
 #  - TP1 (parcial + SL a breakeven), TP2 (cierre total), SL alcanzado
-#  - Aviso si el precio está a menos del 30% de distancia al SL
+#  - Aviso si el precio está a menos de 35-40 pips del SL
+#  - Resumen diario a las 23:30 UTC
 #  NOTA: esto corre mientras la pestaña del navegador esté abierta —
 #  Streamlit no tiene un proceso en segundo plano 24/7 sin la página abierta.
 # ══════════════════════════════════════════════════════════════════
 def _ahora_ts():
     return datetime.now(pytz.timezone('America/Mexico_City')).timestamp()
+
+def notificar(msg, icon="🏛️"):
+    """Manda a Telegram y muestra un toast dentro de la App."""
+    send_tg(msg)
+    try:
+        corto = msg.split("\n")[0].replace("*","")
+        st.toast(corto, icon=icon)
+    except Exception:
+        pass
 
 def evaluar_y_notificar_par(par, es_par_activo, stf_usar):
     pc = PAIRS[par]
@@ -527,31 +561,37 @@ def evaluar_y_notificar_par(par, es_par_activo, stf_usar):
     trades = sv.get('paper_trades', [])
     abiertos = [t for t in trades if t['estado']=='ABIERTO']
     ahora_ts = _ahora_ts()
+    hora_mx = datetime.now(pytz.timezone('America/Mexico_City')).hour
     tag = par.split()[0]
     cambios = False
 
-    # 1) ALERTA DE ENTRADA — solo si no hay trade abierto y el score cumple mínimo
-    if not abiertos and sen['direccion'] != 0 and sc_['total'] >= 60:
+    # 1) ALERTA DE ENTRADA — máximo 1 operación abierta por par
+    #    umbral normal 58%, pero en sesión asiática solo si es MUY clara (>=80%)
+    umbral = SCORE_MIN_ASIA if es_sesion_asiatica(hora_mx) else SCORE_MIN_ALERTA
+    if not abiertos and sen['direccion'] != 0 and sc_['total'] >= umbral:
         last_alert = sv.get('last_entry_alert', {})
         mismo_setup_reciente = last_alert.get('direccion') == sen['direccion'] and (ahora_ts - last_alert.get('ts', 0)) < 3600
         if not mismo_setup_reciente:
             dir_txt = "Compra" if sen['direccion']==1 else "Venta"
             emoji = "🟢" if sen['direccion']==1 else "🔴"
             razon_txt = " · ".join(sen['razon'][:2]) if sen['razon'] else "Setup técnico confirmado"
-            send_tg(f"{emoji} *SEÑAL {tag}*\n"
+            escenarios = generar_escenarios(par, sen, df_e)
+            esc_txt = "\n".join([f"• {e}" for e in escenarios])
+            notificar(f"{emoji} *SEÑAL {tag}*\n"
                     f"Dirección: {dir_txt}\n"
-                    f"Precio de entrada: {pf(sen['precio'],par)}\n"
+                    f"Precio Entrada: {pf(sen['precio'],par)}\n"
                     f"Stop Loss: {pf(sen['sl'],par)}\n"
                     f"Take Profit 1: {pf(sen['tp'],par)}\n"
                     f"Take Profit 2: {pf(sen['tp2'],par)}\n"
-                    f"Ratio RR: 1:{rr_:.1f}\n"
+                    f"RR: 1:{rr_:.1f}\n"
                     f"Calidad: {sc_['total']}%\n"
-                    f"Razón: {razon_txt}")
+                    f"Razón: {razon_txt}\n\n"
+                    f"🔭 *Escenarios:*\n{esc_txt}", icon="🎯")
             sv['last_entry_alert'] = {'direccion': sen['direccion'], 'ts': ahora_ts}
             if es_par_activo: st.session_state.last_entry_alert = sv['last_entry_alert']
             cambios = True
 
-    # 2) SEGUIMIENTO / TP1 / TP2 / SL de posiciones abiertas de este par
+    # 2) SEGUIMIENTO / TP1 / TP2 / SL de posiciones abiertas de este par (máx. 1)
     precio_t = sen['precio']
     for t in abiertos:
         if t.get('par') != par: continue
@@ -568,7 +608,7 @@ def evaluar_y_notificar_par(par, es_par_activo, stf_usar):
         if tocó_tp1 and not t['tp1_hit']:
             t['tp1_hit'] = True
             t['sl'] = t['entrada']
-            send_tg(f"🎯 *TP1 ALCANZADO — {tag}*\nParcial ganado ✅\nSL movido a breakeven ({pf(t['entrada'],par)}).\nSigue corriendo hacia TP2: {pf(t['tp2'],par)}")
+            notificar(f"🎯 *TP1 ALCANZADO — {tag}*\nParcial ganado ✅\nSL movido a breakeven ({pf(t['entrada'],par)}).\nSigue corriendo hacia TP2: {pf(t['tp2'],par)}", icon="🎯")
             cambios = True
 
         tocó_tp2 = (dirlong and precio_t >= t['tp2']) or (not dirlong and precio_t <= t['tp2'])
@@ -576,33 +616,50 @@ def evaluar_y_notificar_par(par, es_par_activo, stf_usar):
         if tocó_tp2:
             pnl_final = (t['tp2']-t['entrada'])*t['lotes']*pc['contract_size'] if dirlong else (t['entrada']-t['tp2'])*t['lotes']*pc['contract_size']
             t['estado']='CERRADO'; t['pnl']=round(pnl_final,2); t['resultado']='WIN ✅'
-            send_tg(f"🏁 *TP2 ALCANZADO — {tag}* 🟢\nOperación cerrada en {pf(t['tp2'],par)}\nP&L total: +${t['pnl']:.2f}")
+            notificar(f"🏁 *TP2 ALCANZADO — {tag}* 🟢\nOperación cerrada en {pf(t['tp2'],par)}\nP&L total: +${t['pnl']:.2f}", icon="🏁")
             cambios = True
         elif tocó_sl:
             pnl_final = (t['sl']-t['entrada'])*t['lotes']*pc['contract_size'] if dirlong else (t['entrada']-t['sl'])*t['lotes']*pc['contract_size']
             t['estado']='CERRADO'; t['pnl']=round(pnl_final,2)
             t['resultado']='WIN ✅' if pnl_final>0 else 'LOSS ❌'
-            send_tg(f"🛑 *SL ALCANZADO — {tag}*{' (breakeven, parcial ya asegurado)' if t['tp1_hit'] else ''}\nOperación cerrada en {pf(t['sl'],par)}\nP&L: {'+' if pnl_final>0 else ''}${pnl_final:.2f}")
+            notificar(f"🛑 *SL ALCANZADO — {tag}*{' (breakeven, parcial ya asegurado)' if t['tp1_hit'] else ''}\nOperación cerrada en {pf(t['sl'],par)}\nP&L: {'+' if pnl_final>0 else ''}${pnl_final:.2f}", icon="🛑")
             cambios = True
         else:
             dist_sl = abs(precio_t - t['sl'])
-            if t['sl_dist'] > 0 and (dist_sl / t['sl_dist']) < 0.30 and not t['sl_warned']:
-                send_tg(f"⚠️ *CERCA DEL SL — {tag}*\nPrecio actual: {pf(precio_t,par)}\nSL: {pf(t['sl'],par)}\nQueda menos del 30% de la distancia original de riesgo.")
+            dist_sl_pips = a_pips(dist_sl, par)
+            if dist_sl_pips < 40 and not t['sl_warned']:
+                notificar(f"⚠️ *CERCA DEL SL — {tag}*\nPrecio actual: {pf(precio_t,par)}\nSL: {pf(t['sl'],par)}\nQuedan ~{dist_sl_pips:.0f} pips para el SL.", icon="⚠️")
                 t['sl_warned'] = True
                 cambios = True
 
             minutos_desde_followup = (ahora_ts - t['last_followup_ts']) / 60
             if minutos_desde_followup >= 40:
-                dist_tp = abs(t['tp1']-precio_t)
+                dist_tp_pips = a_pips(abs(t['tp1']-precio_t), par)
+                dist_sl_pips2 = a_pips(dist_sl, par)
                 pct = pnl / (t['entrada']*t['lotes']*pc['contract_size']) * 100 if t['entrada'] else 0
-                recomendacion = "Mover SL a breakeven" if (pnl>0 and not t['tp1_hit']) else "Mantener"
-                send_tg(f"📊 *ACTUALIZACIÓN {tag}*\n"
-                        f"Dirección: {'Compra' if dirlong else 'Venta'} @ {pf(t['entrada'],par)}\n"
+
+                tendencia_actual = sen['tendencia']
+                en_contra = (dirlong and tendencia_actual=='BAJISTA') or (not dirlong and tendencia_actual=='ALCISTA')
+                patron_en_contra = sen['patron'] and ((dirlong and 'BAJISTA' in sen['patron']) or (not dirlong and 'ALCISTA' in sen['patron']))
+                if en_contra:
+                    recomendacion = "Salir ahora"; justificacion = "La tendencia se invirtió en contra de la posición."
+                elif pnl > 0 and patron_en_contra:
+                    recomendacion = "Cerrar parcial"; justificacion = "Vela de rechazo en contra mientras vas en ganancia."
+                elif pnl > 0 and not t['tp1_hit']:
+                    recomendacion = "Mover SL a breakeven"; justificacion = "Ya vas en ganancia, protege el capital antes de TP1."
+                else:
+                    recomendacion = "Mantener"; justificacion = "El setup original sigue válido."
+
+                escenarios = generar_escenarios(par, sen, df_e)
+                esc_txt = "\n".join([f"• {e}" for e in escenarios])
+                notificar(f"📊 *ACTUALIZACIÓN {tag}*\n"
                         f"Precio actual: {pf(precio_t,par)}\n"
                         f"P&L: {'+' if pnl>0 else ''}${pnl:.2f} ({pct:+.2f}%)\n"
-                        f"Distancia a TP1: {dist_tp:.5f}\n"
-                        f"Distancia a SL: {dist_sl:.5f}\n"
-                        f"Recomendación: {recomendacion}")
+                        f"Distancia a TP1: ~{dist_tp_pips:.0f} pips\n"
+                        f"Distancia a SL: ~{dist_sl_pips2:.0f} pips\n"
+                        f"Recomendación: {recomendacion}\n"
+                        f"Justificación: {justificacion}\n\n"
+                        f"🔭 *Escenarios:*\n{esc_txt}", icon="📊")
                 t['last_followup_ts'] = ahora_ts
                 cambios = True
 
@@ -614,6 +671,54 @@ def evaluar_y_notificar_par(par, es_par_activo, stf_usar):
             st.session_state.capital = sv['capital']
         gh_save(par, sv)
 
+def enviar_resumen_diario():
+    mx = pytz.timezone('America/Mexico_City')
+    hoy_mx_str = datetime.now(mx).strftime('%d/%m')
+    lineas = ["📅 *RESUMEN DIARIO — MIMI-AI*"]
+    for par_k in PAIRS.keys():
+        pc = PAIRS[par_k]
+        if par_k == st.session_state.par:
+            trades = st.session_state.paper_trades
+        else:
+            trades = gh_load(par_k).get('paper_trades', [])
+        abiertos = [t for t in trades if t['estado']=='ABIERTO']
+        cerrados_hoy = [t for t in trades if t['estado']=='CERRADO' and str(t.get('fecha','')).startswith(hoy_mx_str)]
+        cerrados_todos = [t for t in trades if t['estado']=='CERRADO']
+        ultimos = cerrados_todos[-15:]
+        wins = sum(1 for t in ultimos if 'WIN' in t.get('resultado',''))
+        wr = round(wins/len(ultimos)*100,1) if ultimos else 0
+        try:
+            stf_d = STYLE_TF['Day Trading']
+            df_td = get_data(pc['yf_symbol'], stf_d['trend_interval'], stf_d['trend_period'])
+            tendencia = detectar_tendencia(df_td, pc['ema_trend'][0], pc['ema_trend'][1]) if df_td is not None else 'N/D'
+        except Exception:
+            tendencia = 'N/D'
+        tag = par_k.split()[0]
+        lineas.append(f"\n*{tag}*")
+        lineas.append(f"Sesgo actual: {tendencia}")
+        lineas.append(f"Abiertas: {len(abiertos)}")
+        if cerrados_hoy:
+            resumen_hoy = " · ".join([f"{x['resultado']} ({'+' if x.get('pnl',0)>0 else ''}{x.get('pnl',0):.2f})" for x in cerrados_hoy])
+            lineas.append(f"Cerradas hoy: {resumen_hoy}")
+        else:
+            lineas.append("Cerradas hoy: ninguna")
+        lineas.append(f"Winrate (últimas {len(ultimos)}): {wr}%")
+    notificar("\n".join(lineas), icon="📅")
+
+def revisar_resumen_diario():
+    ahora_utc = datetime.now(pytz.utc)
+    if ahora_utc.hour == 23 and ahora_utc.minute >= 30:
+        hoy_str = ahora_utc.strftime('%Y-%m-%d')
+        cfg = gh_load_config()
+        if cfg.get('last_daily_summary') != hoy_str:
+            try:
+                enviar_resumen_diario()
+            except Exception:
+                pass
+            cfg['par'] = st.session_state.par
+            cfg['last_daily_summary'] = hoy_str
+            gh_save_config(cfg)
+
 @fragment_decorator(run_every=60)
 def monitor_automatico(par_seleccionado, stf_activo):
     for par_k in PAIRS.keys():
@@ -622,6 +727,10 @@ def monitor_automatico(par_seleccionado, stf_activo):
             evaluar_y_notificar_par(par_k, par_k == par_seleccionado, stf_usar)
         except Exception:
             pass
+    try:
+        revisar_resumen_diario()
+    except Exception:
+        pass
 
 # ── SIDEBAR ───────────────────────────────────────────────────────
 with st.sidebar:
@@ -664,6 +773,9 @@ with st.sidebar:
     if noticia_hoy:
         forzar_pese_noticia = st.checkbox("Forzar señal de todas formas", value=False)
     st.caption("Por defecto se evita operar en noticias de alto impacto salvo que tú lo pidas.")
+    st.markdown("---")
+    st.markdown(f'<div style="font-family:Cinzel,serif;color:{T["primary"]}99;font-size:.8em;letter-spacing:2px;">🤖 MONITOREO AUTOMÁTICO</div>', unsafe_allow_html=True)
+    st.caption("Ambos pares se revisan cada 60s mientras esta pestaña esté abierta. Umbral de señal: 58% (80% en sesión asiática). Máx. 1 operación abierta por par. Resumen diario a las 23:30 UTC.")
     st.markdown("---")
     st.markdown(f'<div style="font-family:Cinzel,serif;color:{T["primary"]}99;font-size:.8em;letter-spacing:2px;">📱 TELEGRAM COMANDOS</div>', unsafe_allow_html=True)
     st.caption("entré · no · salgo · estado · señal · me quedo")
@@ -1094,7 +1206,7 @@ with tab8:
     st.markdown(f"**Par actual: {PAR}.** Comandos: `entré` `no` `estado` `me quedo` `salgo` `señal`")
     col_a, col_b = st.columns(2)
     with col_a:
-        ac2 = st.slider("Score mínimo para alertar (%)", 30, 90, 60)
+        ac2 = st.slider("Score mínimo para alertar (%)", 30, 90, 58)
     with col_b:
         if st.button("🧪 Prueba"):
             ok=send_tg(f"🏛️ MIMI-AI Test ✅\nPar: {PAR}\nPrecio: {pf(precio,PAR)}")
