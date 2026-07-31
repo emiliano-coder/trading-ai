@@ -32,6 +32,12 @@ try:
 except:
     TG_TOKEN = TG_CHAT_ID = GH_TOKEN = GH_REPO = ''
 
+try:
+    GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
+except:
+    GEMINI_API_KEY = ''
+GEMINI_MODEL = st.secrets.get("GEMINI_MODEL", "gemini-2.5-flash") if hasattr(st, "secrets") else "gemini-2.5-flash"
+
 # ══════════════════════════════════════════════════════════════════
 #  ESTRATEGIA POR PAR — Trend Following + Pullback (price action puro)
 #  XAU/USD: EMA50/200 tendencia · EMA20/50 pullback · alterna IB Breakout
@@ -409,6 +415,76 @@ def get_tg_updates(offset=0):
     except: pass
     return []
 
+# ══════════════════════════════════════════════════════════════════
+#  ANÁLISIS DE IMÁGENES (screenshots de gráficos) — Google Gemini
+#  Usa el SDK nuevo "google-genai" (el viejo "google-generativeai" ya
+#  fue descontinuado por Google). Requiere GEMINI_API_KEY en Secrets.
+#  Modelo configurable vía GEMINI_MODEL en Secrets (por defecto
+#  "gemini-2.5-flash" — revisa ai.google.dev/gemini-api/docs/models
+#  cada tanto porque Google cambia/retira modelos con frecuencia).
+# ══════════════════════════════════════════════════════════════════
+GEMINI_SYSTEM_PROMPT = """Eres MIMI-AI, analista técnico profesional especializado EXCLUSIVAMENTE en XAUUSD (oro) y EURUSD. Te muestran capturas de pantalla de gráficos de trading (velas japonesas, indicadores, líneas dibujadas a mano, etc.) y debes analizarlas con criterio profesional y disciplinado.
+
+Para cada imagen que recibas, estructura tu respuesta así:
+
+1. **Par y timeframe** — identifica XAUUSD o EURUSD y el timeframe aproximado si es visible. Si no puedes determinarlo con certeza, dilo explícitamente en vez de adivinar.
+2. **Estructura de mercado** — tendencia visible (alcista / bajista / rango), máximos y mínimos relevantes (HH/HL/LH/LL si se distinguen claramente).
+3. **Niveles clave** — soportes, resistencias, zonas de oferta/demanda o líneas de tendencia dibujadas en la imagen, con precios concretos si son legibles.
+4. **Patrones e indicadores visibles** — velas relevantes (pin bar, engulfing, doble techo/piso, banderas, etc.) e indicadores visibles (RSI, MACD, EMAs, Bollinger) con su lectura actual.
+5. **Escenarios (2-3, obligatorio)** — con el mismo estilo siempre: "Si rompe X con fuerza → probable continuación hasta Y", "Si rechaza en X → posible retroceso hacia Z", "Esperar confirmación en zona actual".
+6. **Recomendación y calidad** — Comprar / Vender / Esperar, más una calificación aproximada 0-100% de qué tan claro está el setup (40% calidad técnica, 30% probabilidad direccional, 15% contexto/noticias — asume neutral si no tienes esa info, 15% gestión de riesgo visible).
+
+Reglas estrictas:
+- NUNCA inventes niveles de precio que no puedas justificar con lo que se ve en la imagen. Si está borrosa o incompleta, dilo.
+- Si la imagen NO es un gráfico de trading, dilo directamente y no fuerces un análisis técnico falso.
+- Sé directo, profesional y breve — usa viñetas y encabezados cortos, sin relleno.
+- No des garantías de resultado — el análisis técnico comunica probabilidades, no certezas.
+- Responde siempre en español, con emojis moderados (🟢🔴📊🎯🔭⚠️) para que se lea fácil en Telegram.
+- Máximo ~200 palabras salvo que te pidan explícitamente más detalle."""
+
+@st.cache_resource
+def get_gemini_client():
+    if not GEMINI_API_KEY:
+        return None
+    try:
+        from google import genai
+        return genai.Client(api_key=GEMINI_API_KEY)
+    except Exception:
+        return None
+
+def descargar_foto_telegram(file_id):
+    """Descarga la foto de mayor resolución que Telegram guardó para ese file_id."""
+    try:
+        r = requests.get(f"https://api.telegram.org/bot{TG_TOKEN}/getFile",
+                          params={'file_id': file_id}, timeout=10)
+        file_path = r.json()['result']['file_path']
+        url = f"https://api.telegram.org/file/bot{TG_TOKEN}/{file_path}"
+        img = requests.get(url, timeout=15)
+        mime = 'image/png' if file_path.lower().endswith('.png') else 'image/jpeg'
+        return img.content, mime
+    except Exception:
+        return None, None
+
+def analizar_imagen_grafica(image_bytes, mime_type, contexto_extra=""):
+    """Manda la imagen + el system prompt fuerte a Gemini y regresa el análisis en texto."""
+    client = get_gemini_client()
+    if client is None:
+        return "⚠️ No configuraste GEMINI_API_KEY en Secrets todavía, así que no puedo analizar imágenes."
+    try:
+        from google.genai import types
+        partes = [
+            types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
+            f"Analiza esta captura de gráfico de trading. {contexto_extra}".strip()
+        ]
+        resp = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=partes,
+            config=types.GenerateContentConfig(system_instruction=GEMINI_SYSTEM_PROMPT, temperature=0.3),
+        )
+        return resp.text or "No pude generar un análisis para esta imagen."
+    except Exception as e:
+        return f"⚠️ Error analizando la imagen con Gemini: {e}"
+
 def parse_tg_command(txt):
     t = txt.lower().strip()
     if any(w in t for w in ['entré','entre','sí entro','si entro','entro','long','short','sí','si']): return 'ENTRO'
@@ -426,7 +502,26 @@ def process_tg_updates(par, senal, score, risk_pct, contract_size):
         uid = u.get('update_id', 0)
         if uid <= st.session_state.last_tg_update: continue
         st.session_state.last_tg_update = uid + 1
-        txt = u.get('message', {}).get('text', '')
+        msg = u.get('message', {})
+
+        # ── FOTO/SCREENSHOT DE GRÁFICO → análisis con Gemini ──────
+        fotos = msg.get('photo')
+        if fotos:
+            file_id = fotos[-1]['file_id']  # última = mayor resolución
+            caption = msg.get('caption', '')
+            send_tg("📸 Recibí tu captura, analizándola...")
+            img_bytes, mime = descargar_foto_telegram(file_id)
+            if img_bytes:
+                contexto = f"Contexto de la app: par activo {par}, precio actual {pf(precio,par)}. {caption}".strip()
+                analisis = analizar_imagen_grafica(img_bytes, mime, contexto)
+                send_tg(f"🖼️ *ANÁLISIS DE IMAGEN*\n\n{analisis}")
+                try: st.toast("Análisis de imagen enviado", icon="🖼️")
+                except Exception: pass
+            else:
+                send_tg("⚠️ No pude descargar la imagen, intenta reenviarla.")
+            continue
+
+        txt = msg.get('text', '')
         if not txt: continue
         cmd = parse_tg_command(txt)
         ot  = [t for t in st.session_state.paper_trades if t['estado'] == 'ABIERTO']
