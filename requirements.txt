@@ -10,3 +10,4 @@ ta
 plotly
 requests
 pandas_datareader
+google-genai
