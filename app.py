@@ -32,11 +32,17 @@ try:
 except:
     TG_TOKEN = TG_CHAT_ID = GH_TOKEN = GH_REPO = ''
 
-try:
-    GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
-except:
-    GEMINI_API_KEY = ''
-GEMINI_MODEL = st.secrets.get("GEMINI_MODEL", "gemini-2.5-flash") if hasattr(st, "secrets") else "gemini-2.5-flash"
+def _leer_secret(nombre, default=''):
+    """Lectura robusta de Secrets: usa .get (no KeyError), y limpia espacios
+    o saltos de línea invisibles que a veces trae el copy-paste del navegador."""
+    try:
+        val = st.secrets.get(nombre, default)
+        return val.strip() if isinstance(val, str) else val
+    except Exception:
+        return default
+
+GEMINI_API_KEY = _leer_secret("GEMINI_API_KEY", "")
+GEMINI_MODEL   = _leer_secret("GEMINI_MODEL", "gemini-2.5-flash")
 
 # ══════════════════════════════════════════════════════════════════
 #  ESTRATEGIA POR PAR — Trend Following + Pullback (price action puro)
@@ -442,13 +448,16 @@ Reglas estrictas:
 - Responde siempre en español, con emojis moderados (🟢🔴📊🎯🔭⚠️) para que se lea fácil en Telegram.
 - Máximo ~200 palabras salvo que te pidan explícitamente más detalle."""
 
-@st.cache_resource
-def get_gemini_client():
-    if not GEMINI_API_KEY:
+@st.cache_resource(show_spinner=False)
+def get_gemini_client(api_key):
+    """La caché se guarda por valor de api_key: si cambias el secret y
+    reinicias, esta función se vuelve a evaluar en vez de quedarse
+    pegada a un cliente viejo (o a None de antes de configurar la key)."""
+    if not api_key:
         return None
     try:
         from google import genai
-        return genai.Client(api_key=GEMINI_API_KEY)
+        return genai.Client(api_key=api_key)
     except Exception:
         return None
 
@@ -467,9 +476,11 @@ def descargar_foto_telegram(file_id):
 
 def analizar_imagen_grafica(image_bytes, mime_type, contexto_extra=""):
     """Manda la imagen + el system prompt fuerte a Gemini y regresa el análisis en texto."""
-    client = get_gemini_client()
+    if not GEMINI_API_KEY:
+        return "⚠️ GEMINI_API_KEY no está configurada en Secrets (o llegó vacía). Revisa Settings → Secrets en Streamlit Cloud."
+    client = get_gemini_client(GEMINI_API_KEY)
     if client is None:
-        return "⚠️ No configuraste GEMINI_API_KEY en Secrets todavía, así que no puedo analizar imágenes."
+        return "⚠️ La key está presente pero no se pudo crear el cliente de Gemini — probablemente la key es inválida o falta instalar el paquete 'google-genai'."
     try:
         from google.genai import types
         partes = [
@@ -828,7 +839,65 @@ def monitor_automatico(par_seleccionado, stf_activo):
         pass
 
 # ── SIDEBAR ───────────────────────────────────────────────────────
+NAV_GROUPS = [
+    ("PRINCIPAL",    [("senal","🎯","Señal"), ("monitor","👁️","Monitor")]),
+    ("ANÁLISIS",     [("estructura","📐","Estructura"), ("multitf","🌐","Multi-TF"), ("grafica","📊","Gráfica")]),
+    ("TRADING",      [("paper","📋","Paper"), ("historial","📜","Historial")]),
+    ("HERRAMIENTAS", [("chat","💬","Chat"), ("alertas","🔔","Alertas"), ("backtest","📈","Backtest")]),
+]
+if 'page' not in st.session_state:
+    st.session_state.page = 'senal'
+
 with st.sidebar:
+    st.markdown(f"""
+    <style>
+    .mimi-nav-brand {{
+        font-family:'Cinzel',serif; font-weight:900; font-size:1.05em; letter-spacing:6px;
+        text-align:center; color:{T['primary']}; margin:2px 0 16px 0;
+        text-shadow:0 0 12px {T['primary']}44;
+    }}
+    .nav-group-label {{
+        font-family:'Cinzel',serif; font-size:.64em; letter-spacing:3px; text-transform:uppercase;
+        color:{T['primary']}55; margin:14px 2px 2px 2px;
+    }}
+    .nav-item {{
+        font-family:'Philosopher',serif; font-size:.92em; letter-spacing:.5px;
+        padding:8px 12px; margin:2px 0; border-radius:4px;
+    }}
+    .nav-active {{
+        background:linear-gradient(90deg,{T['primary']}26,transparent);
+        color:{T['primary']}; font-weight:700; border-left:3px solid {T['primary']};
+    }}
+    section[data-testid="stSidebar"] button[kind="secondary"],
+    section[data-testid="stSidebar"] button[data-testid="stBaseButton-secondary"] {{
+        background:transparent !important; border:none !important;
+        border-left:3px solid transparent !important; border-radius:4px !important;
+        color:{T['primary']}99 !important; text-align:left !important;
+        font-family:'Philosopher',serif !important; letter-spacing:.5px !important;
+        padding:8px 12px !important; margin:2px 0 !important; box-shadow:none !important;
+        transition:all .22s ease !important;
+    }}
+    section[data-testid="stSidebar"] button[kind="secondary"]:hover,
+    section[data-testid="stSidebar"] button[data-testid="stBaseButton-secondary"]:hover {{
+        background:{T['primary']}14 !important; color:{T['primary']} !important;
+        border-left:3px solid {T['primary']}88 !important; transform:translateX(4px);
+    }}
+    .nav-sep {{ border-top:1px solid {T['primary']}33; margin:16px 0 10px 0; }}
+    </style>
+    """, unsafe_allow_html=True)
+
+    st.markdown('<div class="mimi-nav-brand">MIMI · AI</div>', unsafe_allow_html=True)
+    for grupo, items in NAV_GROUPS:
+        st.markdown(f'<div class="nav-group-label">{grupo}</div>', unsafe_allow_html=True)
+        for key, icon, label in items:
+            if st.session_state.page == key:
+                st.markdown(f'<div class="nav-item nav-active">{icon}&nbsp;&nbsp;{label}</div>', unsafe_allow_html=True)
+            else:
+                if st.button(f"{icon}   {label}", key=f"nav_{key}", use_container_width=True):
+                    st.session_state.page = key
+                    st.rerun()
+    st.markdown('<div class="nav-sep"></div>', unsafe_allow_html=True)
+
     st.markdown(f'<div style="font-family:Cinzel,serif;color:{T["primary"]};letter-spacing:3px;text-align:center;">⚙ CONFIG</div>', unsafe_allow_html=True)
     st.markdown("---")
 
@@ -1023,13 +1092,10 @@ c5.metric("💰 Capital", f"${st.session_state.capital:,.2f}")
 c6.metric("⏱️ Timeframes", STF['label'])
 st.markdown('<div class="greek-orn">── ✦ ──</div>', unsafe_allow_html=True)
 
-# ── TABS ──────────────────────────────────────────────────────────
-tab1,tab2,tab3,tab4,tab5,tab6,tab7,tab8,tab9,tab10 = st.tabs([
-    "🎯 Señal","📐 Estructura","🌐 Multi·TF","📋 Paper","📊 Gráfica",
-    "💬 Chat","📈 Backtest","🔔 Alertas","📜 Historial","👁️ Monitor"])
+# ── CONTENIDO — controlado por la navegación de la sidebar ─────────
 
 # ── TAB 1: SEÑAL ──────────────────────────────────────────────────
-with tab1:
+if st.session_state.page == 'senal':
     ca, cb = st.columns(2)
     with ca:
         st.markdown('<div class="card"><div class="card-title">SEÑAL DEL ORÁCULO</div>', unsafe_allow_html=True)
@@ -1109,7 +1175,7 @@ with tab1:
         st.markdown('</div>', unsafe_allow_html=True)
 
 # ── TAB 2: ESTRUCTURA ──────────────────────────────────────────────
-with tab2:
+if st.session_state.page == 'estructura':
     st.markdown(f'<div style="font-family:Cinzel,serif;color:{T["primary"]};font-size:.85em;letter-spacing:3px;margin-bottom:12px;">ESTRUCTURA — {PAR}</div>', unsafe_allow_html=True)
     r1, r2 = st.columns(2)
     with r1:
@@ -1140,7 +1206,7 @@ with tab2:
         st.markdown('</div>', unsafe_allow_html=True)
 
 # ── TAB 3: MULTI-TF (confluencia genérica, independiente de la estrategia principal) ──
-with tab3:
+if st.session_state.page == 'multitf':
     @st.cache_data(ttl=600)
     def mtf_conf(yf_symbol):
         sigs = {}
@@ -1171,7 +1237,7 @@ with tab3:
         st.markdown(f"{bc2} **{tfn}** — {data['bias']} | RSI:{data['rsi']:.1f} | {pf(data['precio'],PAR)}")
 
 # ── TAB 4: PAPER TRADING ──────────────────────────────────────────
-with tab4:
+if st.session_state.page == 'paper':
     pm1,pm2,pm3 = st.columns(3)
     pm1.metric("💰 Capital", f"${st.session_state.capital:,.2f}")
     ct_c = [t for t in st.session_state.paper_trades if t['estado']=='CERRADO']
@@ -1200,7 +1266,7 @@ with tab4:
         gh_save(PAR, {**sv2,'paper_trades':[],'capital':1000.0}); st.rerun()
 
 # ── TAB 5: GRÁFICA ────────────────────────────────────────────────
-with tab5:
+if st.session_state.page == 'grafica':
     dp = df_entry.tail(120).copy()
     dp['EMA_e'] = ta.trend.ema_indicator(dp['Close'], window=PC['ema_entry'])
     fig = make_subplots(rows=2,cols=1,shared_xaxes=True,row_heights=[0.75,0.25])
@@ -1225,8 +1291,19 @@ with tab5:
     st.caption(f"Timeframe de entrada: {STF['entry_interval']} · EMA{PC['ema_entry']} en dorado" + (" · líneas Fib punteadas" if PC['usa_fib'] else "") + (" · rango IB en verde/rojo" if usar_ib else ""))
 
 # ── TAB 6: CHAT ───────────────────────────────────────────────────
-with tab6:
+if st.session_state.page == 'chat':
     st.caption("💡 Escribe una pregunta o sube una captura de gráfico (XAUUSD/EURUSD) para un análisis híbrido.")
+
+    with st.expander("🔧 Debug Gemini (temporal — bórralo cuando ya funcione)"):
+        if GEMINI_API_KEY:
+            st.success(f"GEMINI_API_KEY detectada ✅ — longitud: {len(GEMINI_API_KEY)} caracteres, empieza con: `{GEMINI_API_KEY[:6]}...`")
+        else:
+            st.error("GEMINI_API_KEY NO detectada ❌ — revisa Settings → Secrets en Streamlit Cloud (nombre exacto, sin espacios, con comillas).")
+        st.caption(f"Modelo configurado (GEMINI_MODEL): `{GEMINI_MODEL}`")
+        cliente_debug = get_gemini_client(GEMINI_API_KEY)
+        st.write("Cliente Gemini inicializado:", "✅ Sí" if cliente_debug else "❌ No")
+        if GEMINI_API_KEY and not cliente_debug:
+            st.warning("La key llegó pero el cliente no se pudo crear — revisa que el paquete `google-genai` esté en requirements.txt y que la key sea válida.")
 
     for msg in st.session_state.chat_history:
         with st.chat_message("user" if msg['role']=='user' else "assistant"):
@@ -1316,7 +1393,7 @@ with tab6:
         st.rerun()
 
 # ── TAB 7: BACKTEST (misma lógica de tendencia+pullback, replay histórico) ──
-with tab7:
+if st.session_state.page == 'backtest':
     @st.cache_data(ttl=3600)
     def backtest(df_json, ema_fast, ema_slow, ema_entry, sl_mult, tp_rr):
         df_b = pd.read_json(io.StringIO(df_json), orient='split')
@@ -1364,7 +1441,7 @@ with tab7:
     if bt_t: st.dataframe(pd.DataFrame(bt_t[-20:]),use_container_width=True)
 
 # ── TAB 8: ALERTAS ────────────────────────────────────────────────
-with tab8:
+if st.session_state.page == 'alertas':
     st.markdown('<div class="card-title" style="font-family:Cinzel,serif;color:#C8A96E;letter-spacing:3px;">ALERTAS · TELEGRAM BIDIRECCIONAL</div>', unsafe_allow_html=True)
     st.markdown(f"**Par actual: {PAR}.** Comandos: `entré` `no` `estado` `me quedo` `salgo` `señal`")
     col_a, col_b = st.columns(2)
@@ -1381,7 +1458,7 @@ with tab8:
             else: st.info("Condiciones no cumplidas (sin setup o score bajo)")
 
 # ── TAB 9: HISTORIAL ──────────────────────────────────────────────
-with tab9:
+if st.session_state.page == 'historial':
     if st.session_state.signal_history:
         df_sh = pd.DataFrame(st.session_state.signal_history)
         st.markdown(f"**{len(df_sh)} señales registradas — {PAR}**")
@@ -1391,7 +1468,7 @@ with tab9:
     else: st.info("Las señales se guardan automáticamente al cargar la app.")
 
 # ── TAB 10: MONITOR ───────────────────────────────────────────────
-with tab10:
+if st.session_state.page == 'monitor':
     ot_m=[t for t in st.session_state.paper_trades if t['estado']=='ABIERTO']
     if ot_m:
         t_m=ot_m[0]; pnl_m=(precio-t_m['entrada'])*(1 if 'LONG' in t_m['dir'] else -1)*t_m['lotes']*CONTRACT
