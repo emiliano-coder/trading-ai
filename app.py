@@ -42,7 +42,7 @@ def _leer_secret(nombre, default=''):
         return default
 
 GEMINI_API_KEY = _leer_secret("GEMINI_API_KEY", "")
-GEMINI_MODEL   = _leer_secret("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_MODEL   = _leer_secret("GEMINI_MODEL", "gemini-2.0-flash")
 
 # ══════════════════════════════════════════════════════════════════
 #  ESTRATEGIA POR PAR — Trend Following + Pullback (price action puro)
@@ -838,11 +838,11 @@ def monitor_automatico(par_seleccionado, stf_activo):
     except Exception:
         pass
 
-# ── SIDEBAR ───────────────────────────────────────────────────────
+# ── SIDEBAR NUEVA (barra delgada que se expande al hover) ─────────
 NAV_GROUPS = [
     ("PRINCIPAL",    [("senal","🎯","Señal"), ("monitor","👁️","Monitor")]),
     ("ANÁLISIS",     [("estructura","📐","Estructura"), ("multitf","🌐","Multi-TF"), ("grafica","📊","Gráfica")]),
-    ("TRADING",      [("paper","📋","Paper"), ("historial","📜","Historial")]),
+    ("OPERAR",       [("paper","📋","Paper"), ("historial","📜","Historial")]),
     ("HERRAMIENTAS", [("chat","💬","Chat"), ("alertas","🔔","Alertas"), ("backtest","📈","Backtest")]),
 ]
 if 'page' not in st.session_state:
@@ -851,54 +851,82 @@ if 'page' not in st.session_state:
 with st.sidebar:
     st.markdown(f"""
     <style>
+    section[data-testid="stSidebar"] {{
+        width: 72px !important;
+        min-width: 72px !important;
+        transition: width 0.28s cubic-bezier(0.4, 0, 0.2, 1) !important;
+        overflow: hidden !important;
+        background: {T['bg']} !important;
+        border-right: 1px solid {T['primary']}22 !important;
+    }}
+    section[data-testid="stSidebar"]:hover {{
+        width: 240px !important;
+        min-width: 240px !important;
+    }}
+    section[data-testid="stSidebar"] > div {{
+        width: 240px !important;
+    }}
     .mimi-nav-brand {{
-        font-family:'Cinzel',serif; font-weight:900; font-size:1.05em; letter-spacing:6px;
-        text-align:center; color:{T['primary']}; margin:2px 0 16px 0;
-        text-shadow:0 0 12px {T['primary']}44;
+        font-family:'Cinzel',serif; font-weight:900; font-size:1.1em; letter-spacing:5px;
+        text-align:center; color:{T['primary']}; margin:12px 0 20px 0;
+        text-shadow:0 0 14px {T['primary']}55; white-space:nowrap;
     }}
     .nav-group-label {{
-        font-family:'Cinzel',serif; font-size:.64em; letter-spacing:3px; text-transform:uppercase;
-        color:{T['primary']}55; margin:14px 2px 2px 2px;
+        font-family:'Cinzel',serif; font-size:.62em; letter-spacing:2.5px; text-transform:uppercase;
+        color:{T['primary']}55; margin:16px 8px 4px 8px; white-space:nowrap;
+        opacity:0; transition: opacity 0.2s ease;
     }}
-    .nav-item {{
-        font-family:'Philosopher',serif; font-size:.92em; letter-spacing:.5px;
-        padding:8px 12px; margin:2px 0; border-radius:4px;
-    }}
-    .nav-active {{
-        background:linear-gradient(90deg,{T['primary']}26,transparent);
-        color:{T['primary']}; font-weight:700; border-left:3px solid {T['primary']};
+    section[data-testid="stSidebar"]:hover .nav-group-label {{
+        opacity:1;
     }}
     section[data-testid="stSidebar"] button[kind="secondary"],
     section[data-testid="stSidebar"] button[data-testid="stBaseButton-secondary"] {{
         background:transparent !important; border:none !important;
-        border-left:3px solid transparent !important; border-radius:4px !important;
+        border-left:3px solid transparent !important; border-radius:6px !important;
         color:{T['primary']}99 !important; text-align:left !important;
-        font-family:'Philosopher',serif !important; letter-spacing:.5px !important;
-        padding:8px 12px !important; margin:2px 0 !important; box-shadow:none !important;
-        transition:all .22s ease !important;
+        font-family:'Philosopher',serif !important; letter-spacing:.4px !important;
+        padding:9px 12px !important; margin:3px 4px !important; box-shadow:none !important;
+        transition: all 0.22s ease !important;
+        white-space: nowrap !important;
     }}
     section[data-testid="stSidebar"] button[kind="secondary"]:hover,
     section[data-testid="stSidebar"] button[data-testid="stBaseButton-secondary"]:hover {{
-        background:{T['primary']}14 !important; color:{T['primary']} !important;
-        border-left:3px solid {T['primary']}88 !important; transform:translateX(4px);
+        background:{T['primary']}18 !important; color:{T['primary']} !important;
+        border-left:3px solid {T['primary']} !important;
+        transform: translateX(3px);
     }}
-    .nav-sep {{ border-top:1px solid {T['primary']}33; margin:16px 0 10px 0; }}
+    .nav-item-active {{
+        background: linear-gradient(90deg, {T['primary']}28, transparent);
+        color: {T['primary']} !important;
+        font-weight: 700;
+        border-left: 3px solid {T['primary']} !important;
+        border-radius: 6px;
+        padding: 9px 12px;
+        margin: 3px 4px;
+        white-space: nowrap;
+    }}
+    .nav-sep {{
+        border-top: 1px solid {T['primary']}25;
+        margin: 18px 8px 12px 8px;
+    }}
     </style>
     """, unsafe_allow_html=True)
 
     st.markdown('<div class="mimi-nav-brand">MIMI · AI</div>', unsafe_allow_html=True)
+
     for grupo, items in NAV_GROUPS:
         st.markdown(f'<div class="nav-group-label">{grupo}</div>', unsafe_allow_html=True)
         for key, icon, label in items:
             if st.session_state.page == key:
-                st.markdown(f'<div class="nav-item nav-active">{icon}&nbsp;&nbsp;{label}</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="nav-item-active">{icon}&nbsp;&nbsp;{label}</div>', unsafe_allow_html=True)
             else:
-                if st.button(f"{icon}   {label}", key=f"nav_{key}", use_container_width=True):
+                if st.button(f"{icon}  {label}", key=f"nav_{key}", use_container_width=True):
                     st.session_state.page = key
                     st.rerun()
+
     st.markdown('<div class="nav-sep"></div>', unsafe_allow_html=True)
 
-    st.markdown(f'<div style="font-family:Cinzel,serif;color:{T["primary"]};letter-spacing:3px;text-align:center;">⚙ CONFIG</div>', unsafe_allow_html=True)
+    st.markdown(f'<div style="font-family:Cinzel,serif;color:{T["primary"]};letter-spacing:3px;text-align:center;font-size:0.85em;">⚙ CONFIG</div>', unsafe_allow_html=True)
     st.markdown("---")
 
     nuevo_par = st.selectbox("💱 Par", list(PAIRS.keys()), index=list(PAIRS.keys()).index(st.session_state.par))
@@ -910,52 +938,31 @@ with st.sidebar:
 
     nuevo_tema = st.selectbox("🏛️ Estilo visual", list(THEMES.keys()), index=list(THEMES.keys()).index(st.session_state.tema))
     if nuevo_tema != st.session_state.tema:
-        st.session_state.tema = nuevo_tema; st.rerun()
+        st.session_state.tema = nuevo_tema
+        st.rerun()
 
     if st.session_state.par == "XAU/USD 🥇":
         nueva_estrat = st.selectbox("📐 Estrategia", ["Trend + Pullback (EMA)", "Initial Balance Breakout (NY Open)"],
                                      index=["Trend + Pullback (EMA)","Initial Balance Breakout (NY Open)"].index(st.session_state.estrategia_xau))
         if nueva_estrat != st.session_state.estrategia_xau:
             st.session_state.estrategia_xau = nueva_estrat
-            sv = gh_load(st.session_state.par); sv['estrategia_xau'] = nueva_estrat; gh_save(st.session_state.par, sv)
-        st.caption("EMA: pullback a EMA20/50 en dirección de tendencia H4/H1. IB: ruptura del rango de la primera hora de NY.")
+            sv = gh_load(st.session_state.par)
+            sv['estrategia_xau'] = nueva_estrat
+            gh_save(st.session_state.par, sv)
+        st.caption("EMA: pullback a EMA20/50 · IB: ruptura primera hora NY")
     else:
-        st.caption("📐 Estrategia: Trend Pullback Continuation — pullback a EMA20 o zona Fib 50–61.8% en dirección de tendencia H4.")
+        st.caption("Trend Pullback · EMA20 o Fib 50–61.8%")
 
     nuevo_estilo = st.selectbox("⏱️ Timeframes", list(STYLE_TF.keys()),
                                  index=list(STYLE_TF.keys()).index(st.session_state.trade_style))
     st.caption(f"Tendencia / Entrada: {STYLE_TF[nuevo_estilo]['label']}")
     if nuevo_estilo != st.session_state.trade_style:
         st.session_state.trade_style = nuevo_estilo
-        sv = gh_load(st.session_state.par); sv['trade_style'] = nuevo_estilo; gh_save(st.session_state.par, sv)
+        sv = gh_load(st.session_state.par)
+        sv['trade_style'] = nuevo_estilo
+        gh_save(st.session_state.par, sv)
 
     risk_pct = st.slider("⚠️ Riesgo/trade (%)", 0.25, 1.0, 1.0, 0.25)
-    st.markdown("---")
-    st.markdown(f'<div style="font-family:Cinzel,serif;color:{T["primary"]}99;font-size:.8em;letter-spacing:2px;">📰 NOTICIAS ALTO IMPACTO</div>', unsafe_allow_html=True)
-    noticia_hoy = st.checkbox("Hay noticia de alto impacto ahora (FOMC/NFP/ECB/CPI)", value=False)
-    forzar_pese_noticia = False
-    if noticia_hoy:
-        forzar_pese_noticia = st.checkbox("Forzar señal de todas formas", value=False)
-    st.caption("Por defecto se evita operar en noticias de alto impacto salvo que tú lo pidas.")
-    st.markdown("---")
-    st.markdown(f'<div style="font-family:Cinzel,serif;color:{T["primary"]}99;font-size:.8em;letter-spacing:2px;">🤖 MONITOREO AUTOMÁTICO</div>', unsafe_allow_html=True)
-    st.caption("Ambos pares se revisan cada 60s mientras esta pestaña esté abierta. Umbral de señal: 58% (80% en sesión asiática). Máx. 1 operación abierta por par. Resumen diario a las 23:30 UTC.")
-    st.markdown("---")
-    st.markdown(f'<div style="font-family:Cinzel,serif;color:{T["primary"]}99;font-size:.8em;letter-spacing:2px;">📱 TELEGRAM COMANDOS</div>', unsafe_allow_html=True)
-    st.caption("entré · no · salgo · estado · señal · me quedo")
-    st.markdown("---")
-    st.markdown(f'<div style="font-family:Cinzel,serif;color:{T["primary"]}99;font-size:.8em;letter-spacing:2px;">📚 GUÍA</div>', unsafe_allow_html=True)
-    for titulo, texto in [
-        ("Tendencia (EMA)","Precio sobre ambas EMAs de tendencia = alcista. Bajo ambas = bajista. Si no, rango — no se opera."),
-        ("Pullback","Retroceso del precio hacia la EMA de entrada antes de continuar la tendencia — punto de entrada de mejor R:R."),
-        ("Fibonacci 50–61.8%","Para EUR/USD: zona de retroceso típica antes de que el precio retome la tendencia."),
-        ("Pin Bar / Engulfing","Velas de rechazo que confirman que el pullback terminó y el precio retoma dirección."),
-        ("Initial Balance Breakout","Rango de la primera hora de NY (08–09 hora MX). Ruptura de ese rango = señal de continuación."),
-        ("Score 0-100%","40% calidad del setup, 30% probabilidad direccional, 15% noticias, 15% gestión de riesgo."),
-        ("DXY","Índice del dólar. Correlación inversa con EUR/USD — se usa como filtro de probabilidad."),
-    ]:
-        with st.expander(titulo): st.write(texto)
-
 T = THEMES.get(st.session_state.tema, THEMES["Mármol Griego"])
 PAR = st.session_state.par
 PC  = PAIRS[PAR]
