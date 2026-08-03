@@ -432,7 +432,7 @@ Para cada imagen que recibas, estructura tu respuesta así:
 3. **Niveles clave** — soportes, resistencias, zonas de oferta/demanda o líneas de tendencia dibujadas en la imagen, con precios concretos si son legibles.
 4. **Patrones e indicadores visibles** — velas relevantes (pin bar, engulfing, doble techo/piso, banderas, etc.) e indicadores visibles (RSI, MACD, EMAs, Bollinger) con su lectura actual.
 5. **Escenarios (2-3, obligatorio)** — con el mismo estilo siempre: "Si rompe X con fuerza → probable continuación hasta Y", "Si rechaza en X → posible retroceso hacia Z", "Esperar confirmación en zona actual".
-6. **Recomendación y calidad** — Comprar / Vender / Esperar, más una calificación aproximada 0-100% de qué tan claro está el setup (40% calidad técnica, 30% probabilidad direccional, 15% contexto/noticias — asume neutral si no tienes esa info, 15% gestión de riesgo visible).
+6. **Recomendación y calidad** — termina SIEMPRE con una línea que diga exactamente "Recomendación: Comprar", "Recomendación: Vender" o "Recomendación: Esperar" (una de esas tres, tal cual), más una calificación aproximada 0-100% de qué tan claro está el setup (40% calidad técnica, 30% probabilidad direccional, 15% contexto/noticias — asume neutral si no tienes esa info, 15% gestión de riesgo visible).
 
 Reglas estrictas:
 - NUNCA inventes niveles de precio que no puedas justificar con lo que se ve en la imagen. Si está borrosa o incompleta, dilo.
@@ -1226,11 +1226,79 @@ with tab5:
 
 # ── TAB 6: CHAT ───────────────────────────────────────────────────
 with tab6:
-    st.caption("💡 Este chat también funciona por Telegram.")
+    st.caption("💡 Escribe una pregunta o sube una captura de gráfico (XAUUSD/EURUSD) para un análisis híbrido.")
+
     for msg in st.session_state.chat_history:
         with st.chat_message("user" if msg['role']=='user' else "assistant"):
-            st.markdown(msg['content'])
-    uin = st.chat_input("Consulta al Oráculo...")
+            if msg.get('image'):
+                st.image(msg['image'], width=350)
+            if msg.get('content'):
+                st.markdown(msg['content'])
+
+    # ── SUBIR CAPTURA DE GRÁFICO ───────────────────────────────────
+    img_file = st.file_uploader("📸 Subir captura de gráfico", type=['png','jpg','jpeg'], key="chat_img_uploader")
+
+    if img_file is not None:
+        file_sig = f"{img_file.name}_{img_file.size}"
+        if st.session_state.get('last_chat_image_sig') != file_sig:
+            st.session_state.last_chat_image_sig = file_sig
+            img_bytes = img_file.getvalue()
+            mime = img_file.type or ("image/png" if img_file.name.lower().endswith("png") else "image/jpeg")
+
+            st.session_state.chat_history.append({'role':'user','content':f"📸 {img_file.name}", 'image':img_bytes})
+
+            with st.spinner("🏛️ Analizando la captura con Gemini y cruzándola con la estrategia..."):
+                contexto = (f"Contexto de la app en este momento — Par activo: {PAR}. "
+                            f"Precio actual: {pf(precio,PAR)}. Tendencia detectada por la estrategia (EMA{PC['ema_trend'][0]}/EMA{PC['ema_trend'][1]}): {senal['tendencia']}. "
+                            f"Señal actual del sistema: {ET.get(pred)}. Score del setup actual: {score['total']}% ({score['categoria']}). "
+                            f"Toma en cuenta esta información al analizar la imagen y compárala contra lo que ves en la captura.")
+                analisis_gemini = analizar_imagen_grafica(img_bytes, mime, contexto)
+
+            # ── Combinar el veredicto de Gemini con la señal del sistema ──
+            gl = analisis_gemini.lower()
+            dice_comprar = 'recomendación: comprar' in gl or ('comprar' in gl and 'vender' not in gl)
+            dice_vender  = 'recomendación: vender'  in gl or ('vender'  in gl and 'comprar' not in gl)
+            concuerda = None
+            if pred == 1 and dice_comprar and not dice_vender: concuerda = True
+            elif pred == -1 and dice_vender and not dice_comprar: concuerda = True
+            elif (pred == 1 and dice_vender) or (pred == -1 and dice_comprar): concuerda = False
+
+            combinacion = [
+                f"**Par activo en la app:** {PAR}",
+                f"**Tendencia (EMA{PC['ema_trend'][0]}/EMA{PC['ema_trend'][1]}):** {senal['tendencia']}",
+                f"**Señal actual del sistema:** {ET.get(pred)} — Score {score['total']}% ({score['categoria']})",
+            ]
+            if senal['pullback'] or senal.get('en_fib_long') or senal.get('en_fib_short'):
+                combinacion.append("**Pullback:** el precio está en zona de entrada válida según la estrategia")
+            if senal['patron']:
+                combinacion.append(f"**Patrón detectado por el sistema:** {senal['patron']}")
+            if concuerda is True:
+                combinacion.append("✅ El análisis de Gemini **coincide** con la señal del sistema.")
+            elif concuerda is False:
+                combinacion.append("⚠️ El análisis de Gemini **no coincide** con la señal del sistema — revisa con cuidado antes de operar.")
+            else:
+                combinacion.append("El sistema no tiene señal direccional clara ahorita — evalúa la imagen a discreción.")
+
+            if concuerda is False:
+                recomendacion_final = "Esperar (hay desacuerdo entre la imagen y el sistema)"
+            elif pred == 1:
+                recomendacion_final = "Comprar"
+            elif pred == -1:
+                recomendacion_final = "Vender"
+            else:
+                recomendacion_final = "Esperar"
+
+            resp_final = (
+                f"### 🖼️ Análisis de la captura (Gemini)\n{analisis_gemini}\n\n"
+                f"### 📊 Combinación con la estrategia actual\n" + "\n".join(f"- {c}" for c in combinacion) + "\n\n"
+                f"### 🎯 Recomendación final: **{recomendacion_final}**\n"
+                f"Calidad aproximada: **{score['total']}%** ({score['categoria']})"
+            )
+            st.session_state.chat_history.append({'role':'mimi','content':resp_final})
+            st.rerun()
+
+    # ── CHAT DE TEXTO (comandos normales, sin cambios) ─────────────
+    uin = st.chat_input("Consulta al Oráculo, o sube una captura arriba...")
     if uin:
         t = uin.lower()
         if 'score' in t or 'calificaci' in t:
@@ -1242,7 +1310,7 @@ with tab6:
         elif 'tp' in t or 'objetivo' in t:
             resp = f"TP: {pf(senal['tp'],PAR)} | R:R 1:{rr_actual:.2f}"
         else:
-            resp = f"Señal: {ET.get(pred)} | Score {score['total']}% | {pf(precio,PAR)}\nComandos: entré · no · salgo · estado · señal · me quedo"
+            resp = f"Señal: {ET.get(pred)} | Score {score['total']}% | {pf(precio,PAR)}\nComandos: entré · no · salgo · estado · señal · me quedo\nTambién puedes subir una captura de gráfico arriba 📸"
         st.session_state.chat_history.append({'role':'user','content':uin})
         st.session_state.chat_history.append({'role':'mimi','content':resp})
         st.rerun()
