@@ -4,6 +4,7 @@ import numpy as np
 import yfinance as yf
 import ta
 import pytz
+import time
 from datetime import datetime
 import random
 import warnings
@@ -232,11 +233,14 @@ if 'loaded_par' not in st.session_state or st.session_state.loaded_par != st.ses
 
 # ── THEMES ───────────────────────────────────────────────────────
 THEMES = {
-    "Mármol Griego":  {"primary":"#C8A96E","secondary":"#8B6914","bg":"#0a0905","card":"#13100a"},
-    "Bronce Estoico": {"primary":"#CD7F32","secondary":"#8B4513","bg":"#080503","card":"#120a05"},
-    "Lapislázuli":    {"primary":"#6B8FCE","secondary":"#3A5A9B","bg":"#03060f","card":"#070b18"},
-    "Olimpo Oscuro":  {"primary":"#9B7FD4","secondary":"#6B4FA0","bg":"#060308","card":"#0d0614"},
-    "Athena":         {"primary":"#7BAF9E","secondary":"#3D7A68","bg":"#030a08","card":"#06120f"},
+    "Mármol Griego":   {"primary":"#C8A96E","secondary":"#8B6914","bg":"#0a0905","card":"#13100a"},
+    "Bronce Estoico":  {"primary":"#CD7F32","secondary":"#8B4513","bg":"#080503","card":"#120a05"},
+    "Lapislázuli":     {"primary":"#6B8FCE","secondary":"#3A5A9B","bg":"#03060f","card":"#070b18"},
+    "Olimpo Oscuro":   {"primary":"#9B7FD4","secondary":"#6B4FA0","bg":"#060308","card":"#0d0614"},
+    "Athena":          {"primary":"#7BAF9E","secondary":"#3D7A68","bg":"#030a08","card":"#06120f"},
+    "Ónix Espartano":  {"primary":"#B33A3A","secondary":"#6E1F1F","bg":"#070505","card":"#100b0b"},
+    "Laurel de Delfos":{"primary":"#8FB08C","secondary":"#4C6B4A","bg":"#050a06","card":"#0a120b"},
+    "Púrpura Imperial":{"primary":"#A97FD0","secondary":"#5E3B87","bg":"#08050c","card":"#120a18"},
 }
 if 'tema' not in st.session_state: st.session_state.tema = "Mármol Griego"
 T = THEMES.get(st.session_state.tema, THEMES["Mármol Griego"])
@@ -470,13 +474,18 @@ Para cada imagen que recibas, estructura tu respuesta así:
 3. **Niveles clave** — soportes, resistencias, zonas de oferta/demanda o líneas de tendencia dibujadas en la imagen, con precios concretos si son legibles.
 4. **Patrones e indicadores visibles** — velas relevantes (pin bar, engulfing, doble techo/piso, banderas, etc.) e indicadores visibles (RSI, MACD, EMAs, Bollinger) con su lectura actual.
 5. **Escenarios (2-3, obligatorio)** — con el mismo estilo siempre: "Si rompe X con fuerza → probable continuación hasta Y", "Si rechaza en X → posible retroceso hacia Z", "Esperar confirmación en zona actual".
-6. **Recomendación y calidad** — termina SIEMPRE con una línea que diga exactamente "Recomendación: Comprar", "Recomendación: Vender" o "Recomendación: Esperar" (una de esas tres, tal cual), más una calificación aproximada 0-100% de qué tan claro está el setup (40% calidad técnica, 30% probabilidad direccional, 15% contexto/noticias — asume neutral si no tienes esa info, 15% gestión de riesgo visible).
+6. **Decisión — obligatorio, sin vaguedad** — termina SIEMPRE con una línea "Decisión:" seguida de UNA de estas tres formas concretas (nunca dejes la decisión abierta ni te quedes solo en "depende"):
+   - Si el setup ya está confirmado ahora mismo: **"Decisión: Compra ahora"** o **"Decisión: Vende ahora"**, con el nivel de entrada.
+   - Si falta un disparador claro: **"Decisión: Espera a que rompa/rechace en $X para comprar/vender"** — siempre con el nivel de precio EXACTO que activaría la entrada, nunca un "espera" sin número.
+   - Solo usa **"Decisión: Sin operación"** si la imagen es demasiado ambigua o ilegible para dar ni siquiera un nivel de activación.
+   Después de la Decisión agrega una calificación aproximada 0-100% de qué tan limpio está el setup (40% calidad técnica, 30% probabilidad direccional, 15% contexto/noticias — asume neutral si no tienes esa info, 15% gestión de riesgo visible) — esto es información de apoyo, la Decisión es lo principal.
 
 Reglas estrictas:
 - NUNCA inventes niveles de precio que no puedas justificar con lo que se ve en la imagen. Si está borrosa o incompleta, dilo.
 - Si la imagen NO es un gráfico de trading, dilo directamente y no fuerces un análisis técnico falso.
 - Sé directo, profesional y breve — usa viñetas y encabezados cortos, sin relleno.
-- No des garantías de resultado — el análisis técnico comunica probabilidades, no certezas.
+- La Decisión debe ser accionable: evita frases como "podría subir o bajar" sin más — siempre da la condición o el nivel exacto que el usuario debe vigilar.
+- Aun siendo directivo, no prometas resultados garantizados — el análisis técnico da probabilidades altas, no certezas absolutas.
 - Responde siempre en español, con emojis moderados (🟢🔴📊🎯🔭⚠️) para que se lea fácil en Telegram.
 - Máximo ~200 palabras salvo que te pidan explícitamente más detalle."""
 
@@ -506,27 +515,40 @@ def descargar_foto_telegram(file_id):
     except Exception:
         return None, None
 
+GEMINI_MODELOS_RESPALDO = ["gemini-3.5-flash", "gemini-3-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash"]
+
 def analizar_imagen_grafica(image_bytes, mime_type, contexto_extra=""):
-    """Manda la imagen + el system prompt fuerte a Gemini y regresa el análisis en texto."""
+    """Manda la imagen + el system prompt fuerte a Gemini y regresa el análisis en texto.
+    Si el modelo configurado ya no existe (Google los retira seguido), reintenta
+    automáticamente con una lista de respaldo antes de rendirse."""
     if not GEMINI_API_KEY:
         return "⚠️ GEMINI_API_KEY no está configurada en Secrets (o llegó vacía). Revisa Settings → Secrets en Streamlit Cloud."
     client = get_gemini_client(GEMINI_API_KEY)
     if client is None:
         return "⚠️ La key está presente pero no se pudo crear el cliente de Gemini — probablemente la key es inválida o falta instalar el paquete 'google-genai'."
-    try:
-        from google.genai import types
-        partes = [
-            types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
-            f"Analiza esta captura de gráfico de trading. {contexto_extra}".strip()
-        ]
-        resp = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=partes,
-            config=types.GenerateContentConfig(system_instruction=GEMINI_SYSTEM_PROMPT, temperature=0.3),
-        )
-        return resp.text or "No pude generar un análisis para esta imagen."
-    except Exception as e:
-        return f"⚠️ Error analizando la imagen con Gemini: {e}"
+
+    from google.genai import types
+    partes = [
+        types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
+        f"Analiza esta captura de gráfico de trading. {contexto_extra}".strip()
+    ]
+    intentos = [GEMINI_MODEL] + [m for m in GEMINI_MODELOS_RESPALDO if m != GEMINI_MODEL]
+    ultimo_error = None
+    for modelo in intentos:
+        try:
+            resp = client.models.generate_content(
+                model=modelo,
+                contents=partes,
+                config=types.GenerateContentConfig(system_instruction=GEMINI_SYSTEM_PROMPT, temperature=0.3),
+            )
+            aviso = f"\n\n_(nota: {GEMINI_MODEL} ya no está disponible, usé {modelo} — actualiza GEMINI_MODEL en Secrets)_" if modelo != GEMINI_MODEL else ""
+            return (resp.text or "No pude generar un análisis para esta imagen.") + aviso
+        except Exception as e:
+            ultimo_error = e
+            if "404" in str(e) or "NOT_FOUND" in str(e) or "no longer available" in str(e):
+                continue  # prueba el siguiente modelo de la lista
+            break  # otro tipo de error (key inválida, red, etc.) — no tiene caso seguir probando
+    return f"⚠️ Error analizando la imagen con Gemini (probé {len(intentos)} modelos): {ultimo_error}"
 
 def parse_tg_command(txt):
     t = txt.lower().strip()
@@ -618,7 +640,15 @@ st.markdown(f"""
 @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700;900&family=Philosopher:ital,wght@0,400;0,700;1,400&display=swap');
 * {{ font-family:'Philosopher',serif; }}
 h1,h2,h3,h4 {{ font-family:'Cinzel',serif !important; color:{T['primary']} !important; letter-spacing:2px; }}
-.stApp {{ background:{T['bg']} !important; }}
+.stApp {{
+    background:
+        radial-gradient(circle at 8% 12%, {T['primary']}0d, transparent 32%),
+        radial-gradient(circle at 92% 18%, {T['secondary']}0d, transparent 34%),
+        radial-gradient(circle at 15% 88%, {T['secondary']}0a, transparent 30%),
+        radial-gradient(circle at 90% 85%, {T['primary']}0a, transparent 32%),
+        {T['bg']} !important;
+    background-attachment:fixed;
+}}
 .stTabs [data-baseweb="tab"] {{ font-family:'Cinzel',serif; color:{T['primary']}99; font-size:.7em; letter-spacing:1px; }}
 .stTabs [aria-selected="true"] {{ color:{T['primary']} !important; border-bottom:2px solid {T['primary']}; }}
 .mimi-title {{ font-family:'Cinzel',serif; font-size:clamp(1.8rem,5vw,3rem); font-weight:900; letter-spacing:10px; text-align:center;
@@ -626,6 +656,15 @@ h1,h2,h3,h4 {{ font-family:'Cinzel',serif !important; color:{T['primary']} !impo
     -webkit-background-clip:text; -webkit-text-fill-color:transparent; filter:drop-shadow(0 0 24px {T['primary']}44); margin:8px 0; }}
 .mimi-sub {{ text-align:center; font-family:'Philosopher',serif; font-style:italic; color:{T['primary']}77; font-size:.85em; letter-spacing:4px; }}
 .greek-orn {{ text-align:center; color:{T['primary']}55; letter-spacing:8px; margin:6px 0; font-size:.9em; }}
+.meander-divider {{
+    height:10px; margin:4px 0 18px 0; opacity:.35;
+    background-image:repeating-linear-gradient(90deg,
+        {T['primary']} 0 3px, transparent 3px 6px, transparent 6px 9px, {T['primary']} 9px 12px,
+        {T['primary']} 12px 15px, transparent 15px 24px);
+    background-size:24px 10px; background-repeat:repeat-x; background-position:center;
+    mask-image:linear-gradient(90deg,transparent,black 15%,black 85%,transparent);
+    -webkit-mask-image:linear-gradient(90deg,transparent,black 15%,black 85%,transparent);
+}}
 .ticker-wrap {{ background:linear-gradient(90deg,{T['bg']},{T['card']},{T['bg']});
     border-top:1px solid {T['primary']}44; border-bottom:1px solid {T['primary']}44; overflow:hidden; padding:7px 0; margin:3px 0; }}
 .ticker-label {{ font-family:'Cinzel',serif; color:{T['primary']}; font-size:10px; letter-spacing:2px;
@@ -1010,55 +1049,123 @@ with st.container(key="mimi_topnav"):
                     st.session_state.nav_group_open = None
                     st.rerun()
 
-# ── HERO — portada con efecto parallax al deslizar ──────────────────
-with st.container(key="mimi_hero"):
+# ── NOTICIAS — ticker con lo más reciente de oro y EUR/USD (yfinance, gratis) ──
+@st.cache_data(ttl=600)
+def obtener_noticias():
+    titulares = []
+    for simbolo in ["GC=F", "EURUSD=X"]:
+        try:
+            items = yf.Ticker(simbolo).news or []
+            for it in items[:4]:
+                # yfinance ha cambiado el formato de 'news' varias veces —
+                # se intenta leer de las dos estructuras conocidas.
+                contenido = it.get('content', it)
+                titulo = contenido.get('title') or it.get('title')
+                if titulo:
+                    titulares.append(titulo.strip())
+        except Exception:
+            continue
+    vistos, unicos = set(), []
+    for t in titulares:
+        if t not in vistos:
+            vistos.add(t); unicos.append(t)
+    return unicos[:8]
+
+def render_ticker_noticias():
+    noticias = obtener_noticias()
+    if noticias:
+        texto = "   📰   ".join(noticias)
+    else:
+        texto = "No hay noticias relevantes de oro o EUR/USD en este momento."
+    contenido = (f"  📰 NOTICIAS · ORO & EUR/USD  ·   {texto}   ")*2
     st.markdown(f"""
-    <style>
-    .st-key-mimi_hero {{
-        position:relative; min-height:74vh;
-        display:flex; flex-direction:column; justify-content:center; align-items:center;
-        text-align:center; padding:36px 12px 24px 12px; margin-bottom:6px; overflow:hidden;
-    }}
-    .hero-bg {{
-        position:absolute; inset:0; z-index:0;
-        background:
-            radial-gradient(circle at 28% 22%, {T['primary']}22, transparent 45%),
-            radial-gradient(circle at 76% 72%, {T['secondary']}22, transparent 50%),
-            {T['bg']};
-        background-attachment:fixed;
-    }}
-    .hero-content {{ position:relative; z-index:1; max-width:760px; }}
-    .hero-title {{
-        font-family:'Cinzel',serif; font-size:clamp(2.2rem,7vw,4rem); font-weight:900; letter-spacing:13px;
-        background:linear-gradient(180deg,#E8D5A3 0%,{T['primary']} 50%,{T['secondary']} 100%);
-        -webkit-background-clip:text; -webkit-text-fill-color:transparent;
-        filter:drop-shadow(0 0 28px {T['primary']}55); margin:10px 0;
-    }}
-    .hero-sub {{
-        font-family:'Philosopher',serif; font-style:italic; color:{T['primary']}99;
-        font-size:1em; letter-spacing:4px; margin-bottom:18px;
-    }}
-    .hero-oracle {{
-        font-family:'Philosopher',serif; color:{T['primary']}bb; font-size:1.05em;
-        line-height:1.75; max-width:600px; margin:0 auto 30px auto;
-    }}
-    .hero-scroll-hint {{
-        font-family:'Cinzel',serif; color:{T['primary']}55; font-size:.68em; letter-spacing:3px;
-        margin-top:30px; animation:hero-bounce 2.2s ease-in-out infinite;
-    }}
-    @keyframes hero-bounce {{ 0%,100%{{transform:translateY(0);}} 50%{{transform:translateY(8px);}} }}
-    </style>
-    <div class="hero-bg"></div>
-    <div class="hero-content">
-      <div class="greek-orn">─────── ✦ ───────</div>
-      <div class="hero-title">MIMI · AI</div>
-      <div class="hero-sub">XAU/USD · EUR/USD · Trend Following · Pullback · Price Action</div>
-      <div class="hero-oracle">El Oráculo analiza el oro y el euro-dólar con tendencia, pullback y confirmación de
-      precio — disciplina estoica, sin ruido, sin promesas vacías. Cada señal se mide, se justifica y se registra.</div>
+    <div class="ticker-wrap">
+      <span class="ticker-label">NEWS</span>
+      <div style="overflow:hidden;display:inline-block;width:calc(100% - 90px)">
+        <div class="t-s1" style="color:{T['primary']}cc;font-family:'Philosopher',serif;font-size:.82em;">{contenido}</div>
+      </div>
     </div>
     """, unsafe_allow_html=True)
-    precios_en_vivo(PAR)
-    st.markdown('<div class="hero-scroll-hint">── desliza para entrar ──</div>', unsafe_allow_html=True)
+
+# ── HERO / SPLASH — portada de presentación con parallax, se cierra sola ──
+if 'hero_dismissed' not in st.session_state:
+    st.session_state.hero_dismissed = False
+    st.session_state.hero_shown_at = time.time()
+
+if not st.session_state.hero_dismissed:
+    with st.container(key="mimi_hero"):
+        st.markdown(f"""
+        <style>
+        .st-key-mimi_hero {{
+            position:relative; min-height:82vh;
+            display:flex; flex-direction:column; justify-content:center; align-items:center;
+            text-align:center; padding:36px 12px 24px 12px; margin-bottom:6px; overflow:hidden;
+            animation:hero-fadein 1s ease;
+        }}
+        @keyframes hero-fadein {{ from{{opacity:0;}} to{{opacity:1;}} }}
+        .hero-bg {{
+            position:absolute; inset:0; z-index:0;
+            background:
+                radial-gradient(circle at 24% 20%, {T['primary']}26, transparent 45%),
+                radial-gradient(circle at 78% 74%, {T['secondary']}26, transparent 50%),
+                radial-gradient(circle at 50% 95%, {T['primary']}14, transparent 40%),
+                {T['bg']};
+            background-attachment:fixed;
+        }}
+        .hero-content {{ position:relative; z-index:1; max-width:760px; }}
+        .hero-title {{
+            font-family:'Cinzel',serif; font-size:clamp(2.2rem,7vw,4rem); font-weight:900; letter-spacing:13px;
+            background:linear-gradient(180deg,#E8D5A3 0%,{T['primary']} 50%,{T['secondary']} 100%);
+            -webkit-background-clip:text; -webkit-text-fill-color:transparent;
+            filter:drop-shadow(0 0 28px {T['primary']}55); margin:10px 0;
+        }}
+        .hero-sub {{
+            font-family:'Philosopher',serif; font-style:italic; color:{T['primary']}99;
+            font-size:1em; letter-spacing:4px; margin-bottom:18px;
+        }}
+        .hero-oracle {{
+            font-family:'Philosopher',serif; color:{T['primary']}bb; font-size:1.05em;
+            line-height:1.75; max-width:600px; margin:0 auto 30px auto;
+        }}
+        .hero-loading-bar {{
+            width:180px; height:2px; background:{T['primary']}22; margin:26px auto 8px auto;
+            border-radius:2px; overflow:hidden; position:relative;
+        }}
+        .hero-loading-bar::after {{
+            content:''; position:absolute; left:-40%; top:0; height:100%; width:40%;
+            background:{T['primary']}; border-radius:2px;
+            animation:hero-load 1.6s ease-in-out infinite;
+        }}
+        @keyframes hero-load {{ 0%{{left:-40%;}} 100%{{left:100%;}} }}
+        .hero-scroll-hint {{
+            font-family:'Cinzel',serif; color:{T['primary']}55; font-size:.68em; letter-spacing:3px;
+            margin-top:4px;
+        }}
+        </style>
+        <div class="hero-bg"></div>
+        <div class="hero-content">
+          <div class="greek-orn">─────── ✦ ───────</div>
+          <div class="hero-title">MIMI · AI</div>
+          <div class="hero-sub">XAU/USD · EUR/USD · Trend Following · Pullback · Price Action</div>
+          <div class="hero-oracle">El Oráculo analiza el oro y el euro-dólar con tendencia, pullback y confirmación de
+          precio — disciplina estoica, sin ruido, sin promesas vacías. Cada señal se mide, se justifica y se registra.</div>
+        </div>
+        """, unsafe_allow_html=True)
+        precios_en_vivo(PAR)
+        render_ticker_noticias()
+        st.markdown('<div class="hero-loading-bar"></div><div class="hero-scroll-hint">preparando el oráculo</div>', unsafe_allow_html=True)
+        c_skip1, c_skip2, c_skip3 = st.columns([1,1,1])
+        with c_skip2:
+            if st.button("Entrar ahora →", key="hero_skip", use_container_width=True):
+                st.session_state.hero_dismissed = True
+                st.rerun()
+
+    @fragment_decorator(run_every=1)
+    def _hero_autodismiss():
+        if not st.session_state.hero_dismissed and (time.time() - st.session_state.hero_shown_at) > 3.5:
+            st.session_state.hero_dismissed = True
+            st.rerun(scope="app")
+    _hero_autodismiss()
 
 # ── DATA ──────────────────────────────────────────────────────────
 @st.cache_data(ttl=300)
@@ -1150,7 +1257,7 @@ c3.metric("⭐ Score", f"{score['total']}%", score['categoria'].split(' ')[0])
 c4.metric("📐 R:R", f"1:{rr_actual:.2f}" if rr_actual else "—")
 c5.metric("💰 Capital", f"${st.session_state.capital:,.2f}")
 c6.metric("⏱️ Timeframes", STF['label'])
-st.markdown('<div class="greek-orn">── ✦ ──</div>', unsafe_allow_html=True)
+st.markdown('<div class="greek-orn">── ✦ ──</div><div class="meander-divider"></div>', unsafe_allow_html=True)
 
 # ── CONTENIDO — controlado por la barra de navegación superior ─────
 
@@ -1372,17 +1479,90 @@ if st.session_state.page == 'chat':
             if msg.get('content'):
                 st.markdown(msg['content'])
 
-    # ── SUBIR CAPTURA DE GRÁFICO ───────────────────────────────────
-    img_file = st.file_uploader("📸 Subir captura de gráfico", type=['png','jpg','jpeg'], key="chat_img_uploader")
+    # ── SUBIR CAPTURA DE GRÁFICO — 2 formas ─────────────────────────
+    col_up1, col_up2 = st.columns(2)
+    with col_up1:
+        img_file = st.file_uploader("📸 Subir archivo (o arrástralo aquí)", type=['png','jpg','jpeg'], key="chat_img_uploader")
+        st.caption("También puedes arrastrar la imagen directo aquí — no hace falta ni siquiera abrir el explorador de archivos.")
+    with col_up2:
+        st.markdown("**📋 O pega la imagen (Ctrl+V)**")
+        with st.container(key="paste_bridge_wrap"):
+            st.text_area("Pegar imagen", key="paste_bridge", height=68,
+                         placeholder="Copia la captura (Win+Shift+S, Cmd+Shift+4, etc.) y da clic aquí + Ctrl+V",
+                         label_visibility="collapsed")
+        st.caption("Experimental: si tu navegador no lo detecta, usa el uploader de la izquierda.")
+        st.html("""
+        <style>
+        .st-key-paste_bridge_wrap textarea { cursor: text; }
+        </style>
+        <script>
+        (function(){
+            function attach(){
+                var wrap = document.querySelector('.st-key-paste_bridge_wrap');
+                if(!wrap) return;
+                var ta = wrap.querySelector('textarea');
+                if(!ta || ta.dataset.pasteBound) return;
+                ta.dataset.pasteBound = "1";
+                ta.addEventListener('paste', function(e){
+                    var items = (e.clipboardData || {}).items || [];
+                    for (var i=0; i<items.length; i++){
+                        if (items[i].type.indexOf('image') === 0){
+                            var file = items[i].getAsFile();
+                            var reader = new FileReader();
+                            reader.onload = function(evt){
+                                var dataUrl = evt.target.result;
+                                var setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+                                setter.call(ta, dataUrl);
+                                ta.dispatchEvent(new Event('input', {bubbles:true}));
+                                setTimeout(function(){ ta.blur(); }, 50);
+                            };
+                            reader.readAsDataURL(file);
+                            e.preventDefault();
+                            break;
+                        }
+                    }
+                });
+            }
+            var tries = 0;
+            var iv = setInterval(function(){ attach(); tries++; if (tries > 25) clearInterval(iv); }, 300);
+        })();
+        </script>
+        """, unsafe_allow_javascript=True)
+
+    pegado = st.session_state.get('paste_bridge', '')
+    if pegado and pegado.startswith('data:image'):
+        paste_sig = str(len(pegado))
+        if st.session_state.get('last_paste_sig') != paste_sig:
+            st.session_state.last_paste_sig = paste_sig
+            try:
+                header, b64data = pegado.split(',', 1)
+                mime_pegado = header.split(':')[1].split(';')[0]
+                img_bytes_pegado = base64.b64decode(b64data)
+                st.session_state['_pegado_pendiente'] = (img_bytes_pegado, mime_pegado)
+            except Exception:
+                pass
+
+    img_file_bytes = None
+    img_file_mime = None
+    origen_nueva_img = False
 
     if img_file is not None:
         file_sig = f"{img_file.name}_{img_file.size}"
         if st.session_state.get('last_chat_image_sig') != file_sig:
             st.session_state.last_chat_image_sig = file_sig
-            img_bytes = img_file.getvalue()
-            mime = img_file.type or ("image/png" if img_file.name.lower().endswith("png") else "image/jpeg")
+            img_file_bytes = img_file.getvalue()
+            img_file_mime = img_file.type or ("image/png" if img_file.name.lower().endswith("png") else "image/jpeg")
+            origen_nueva_img = True
+    elif st.session_state.get('_pegado_pendiente'):
+        img_file_bytes, img_file_mime = st.session_state.pop('_pegado_pendiente')
+        origen_nueva_img = True
 
-            st.session_state.chat_history.append({'role':'user','content':f"📸 {img_file.name}", 'image':img_bytes})
+    if origen_nueva_img and img_file_bytes:
+        img_bytes = img_file_bytes
+        mime = img_file_mime
+        nombre_img = img_file.name if img_file is not None else "captura pegada"
+        if True:
+            st.session_state.chat_history.append({'role':'user','content':f"📸 {nombre_img}", 'image':img_bytes})
 
             with st.spinner("🏛️ Analizando la captura con Gemini y cruzándola con la estrategia..."):
                 contexto = (f"Contexto de la app en este momento — Par activo: {PAR}. "
@@ -1393,8 +1573,8 @@ if st.session_state.page == 'chat':
 
             # ── Combinar el veredicto de Gemini con la señal del sistema ──
             gl = analisis_gemini.lower()
-            dice_comprar = 'recomendación: comprar' in gl or ('comprar' in gl and 'vender' not in gl)
-            dice_vender  = 'recomendación: vender'  in gl or ('vender'  in gl and 'comprar' not in gl)
+            dice_comprar = 'decisión: compra' in gl or ('compra' in gl and 'vende' not in gl)
+            dice_vender  = 'decisión: vende'   in gl or ('vende'  in gl and 'compra' not in gl)
             concuerda = None
             if pred == 1 and dice_comprar and not dice_vender: concuerda = True
             elif pred == -1 and dice_vender and not dice_comprar: concuerda = True
@@ -1414,21 +1594,26 @@ if st.session_state.page == 'chat':
             elif concuerda is False:
                 combinacion.append("⚠️ El análisis de Gemini **no coincide** con la señal del sistema — revisa con cuidado antes de operar.")
             else:
-                combinacion.append("El sistema no tiene señal direccional clara ahorita — evalúa la imagen a discreción.")
+                combinacion.append("El sistema aún no confirma dirección — usa el nivel de activación de abajo, no te quedes solo esperando sin condición.")
 
+            # Decisión final: siempre accionable, con nivel exacto si no hay setup confirmado todavía
             if concuerda is False:
-                recomendacion_final = "Esperar (hay desacuerdo entre la imagen y el sistema)"
+                recomendacion_final = "Sin operación por ahora — la imagen y el sistema no coinciden, espera más confirmación"
             elif pred == 1:
-                recomendacion_final = "Comprar"
+                recomendacion_final = f"Compra ahora en {pf(precio,PAR)} — SL {pf(senal['sl'],PAR)} / TP1 {pf(senal['tp'],PAR)}"
             elif pred == -1:
-                recomendacion_final = "Vender"
+                recomendacion_final = f"Vende ahora en {pf(precio,PAR)} — SL {pf(senal['sl'],PAR)} / TP1 {pf(senal['tp'],PAR)}"
             else:
-                recomendacion_final = "Esperar"
+                escenarios_niv = generar_escenarios(PAR, senal, df_entry)
+                resistencia_niv = float(df_entry['High'].iloc[-20:].max())
+                soporte_niv = float(df_entry['Low'].iloc[-20:].min())
+                recomendacion_final = (f"Espera a que rompa {pf(resistencia_niv,PAR)} para comprar, "
+                                        f"o a que rompa {pf(soporte_niv,PAR)} para vender — ahí es donde se define.")
 
             resp_final = (
                 f"### 🖼️ Análisis de la captura (Gemini)\n{analisis_gemini}\n\n"
                 f"### 📊 Combinación con la estrategia actual\n" + "\n".join(f"- {c}" for c in combinacion) + "\n\n"
-                f"### 🎯 Recomendación final: **{recomendacion_final}**\n"
+                f"### 🎯 Decisión: **{recomendacion_final}**\n"
                 f"Calidad aproximada: **{score['total']}%** ({score['categoria']})"
             )
             st.session_state.chat_history.append({'role':'mimi','content':resp_final})
