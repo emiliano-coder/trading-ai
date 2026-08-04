@@ -42,7 +42,7 @@ def _leer_secret(nombre, default=''):
         return default
 
 GEMINI_API_KEY = _leer_secret("GEMINI_API_KEY", "")
-GEMINI_MODEL   = _leer_secret("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_MODEL   = _leer_secret("GEMINI_MODEL", "gemini-3.5-flash")
 
 # ══════════════════════════════════════════════════════════════════
 #  ESTRATEGIA POR PAR — Trend Following + Pullback (price action puro)
@@ -426,7 +426,9 @@ def get_tg_updates(offset=0):
 #  Usa el SDK nuevo "google-genai" (el viejo "google-generativeai" ya
 #  fue descontinuado por Google). Requiere GEMINI_API_KEY en Secrets.
 #  Modelo configurable vía GEMINI_MODEL en Secrets (por defecto
-#  "gemini-2.5-flash" — revisa ai.google.dev/gemini-api/docs/models
+#  "gemini-3.5-flash" — OJO: gemini-1.5-flash y gemini-2.0-flash ya
+#  fueron apagados por Google (junio 2026). Revisa
+#  ai.google.dev/gemini-api/docs/deprecations
 #  cada tanto porque Google cambia/retira modelos con frecuencia).
 # ══════════════════════════════════════════════════════════════════
 GEMINI_SYSTEM_PROMPT = """Eres MIMI-AI, analista técnico profesional especializado EXCLUSIVAMENTE en XAUUSD (oro) y EURUSD. Te muestran capturas de pantalla de gráficos de trading (velas japonesas, indicadores, líneas dibujadas a mano, etc.) y debes analizarlas con criterio profesional y disciplinado.
@@ -842,61 +844,82 @@ def monitor_automatico(par_seleccionado, stf_activo):
 NAV_GROUPS = [
     ("PRINCIPAL",    [("senal","🎯","Señal"), ("monitor","👁️","Monitor")]),
     ("ANÁLISIS",     [("estructura","📐","Estructura"), ("multitf","🌐","Multi-TF"), ("grafica","📊","Gráfica")]),
-    ("TRADING",      [("paper","📋","Paper"), ("historial","📜","Historial")]),
+    ("OPERAR",       [("paper","📋","Paper"), ("historial","📜","Historial")]),
     ("HERRAMIENTAS", [("chat","💬","Chat"), ("alertas","🔔","Alertas"), ("backtest","📈","Backtest")]),
 ]
 if 'page' not in st.session_state:
     st.session_state.page = 'senal'
 
 with st.sidebar:
+    # El rail vive en su PROPIO contenedor (con key) para que solo él se
+    # angoste/expanda — el panel de CONFIG de abajo queda intacto y a
+    # ancho completo siempre, sin verse afectado por el hover del rail.
     st.markdown(f"""
     <style>
-    .mimi-nav-brand {{
-        font-family:'Cinzel',serif; font-weight:900; font-size:1.05em; letter-spacing:6px;
-        text-align:center; color:{T['primary']}; margin:2px 0 16px 0;
-        text-shadow:0 0 12px {T['primary']}44;
+    .st-key-nav_rail {{
+        width:76px; min-width:76px; max-width:76px; overflow:hidden;
+        transition:width .38s cubic-bezier(.4,0,.2,1), min-width .38s cubic-bezier(.4,0,.2,1), max-width .38s cubic-bezier(.4,0,.2,1);
+        background:linear-gradient(180deg,{T['card']},{T['bg']});
+        border:1px solid {T['primary']}22; border-radius:10px;
+        padding:18px 0 18px 0; margin-bottom:22px;
     }}
-    .nav-group-label {{
-        font-family:'Cinzel',serif; font-size:.64em; letter-spacing:3px; text-transform:uppercase;
-        color:{T['primary']}55; margin:14px 2px 2px 2px;
+    .st-key-nav_rail:hover {{
+        width:300px; min-width:300px; max-width:300px;
     }}
-    .nav-item {{
-        font-family:'Philosopher',serif; font-size:.92em; letter-spacing:.5px;
-        padding:8px 12px; margin:2px 0; border-radius:4px;
+    .rail-brand {{
+        display:flex; align-items:center; gap:14px; white-space:nowrap; overflow:hidden;
+        padding:2px 0 22px 18px;
     }}
-    .nav-active {{
-        background:linear-gradient(90deg,{T['primary']}26,transparent);
+    .rail-brand-icon {{ font-size:1.5em; flex-shrink:0; filter:drop-shadow(0 0 6px {T['primary']}66); }}
+    .rail-brand-text {{
+        font-family:'Cinzel',serif; font-weight:900; font-size:1.05em; letter-spacing:5px;
+        color:{T['primary']}; text-shadow:0 0 12px {T['primary']}44;
+    }}
+    .rail-group-label {{
+        font-family:'Cinzel',serif; font-size:.62em; letter-spacing:3px; text-transform:uppercase;
+        color:{T['primary']}55; white-space:nowrap; overflow:hidden;
+        opacity:0; max-height:0; margin:0 0 0 18px;
+        transition:opacity .3s ease .08s, max-height .3s ease, margin .3s ease;
+    }}
+    .st-key-nav_rail:hover .rail-group-label {{
+        opacity:1; max-height:30px; margin:20px 0 6px 18px;
+    }}
+    .rail-active {{
+        display:flex; align-items:center; gap:14px; white-space:nowrap; overflow:hidden;
+        font-family:'Philosopher',serif; font-size:.95em; letter-spacing:.5px;
+        padding:11px 0 11px 18px; margin:3px 8px; border-radius:6px;
+        background:linear-gradient(90deg,{T['primary']}24,transparent);
         color:{T['primary']}; font-weight:700; border-left:3px solid {T['primary']};
     }}
-    section[data-testid="stSidebar"] button[kind="secondary"],
-    section[data-testid="stSidebar"] button[data-testid="stBaseButton-secondary"] {{
+    .st-key-nav_rail button {{
         background:transparent !important; border:none !important;
-        border-left:3px solid transparent !important; border-radius:4px !important;
+        border-left:3px solid transparent !important; border-radius:6px !important;
         color:{T['primary']}99 !important; text-align:left !important;
-        font-family:'Philosopher',serif !important; letter-spacing:.5px !important;
-        padding:8px 12px !important; margin:2px 0 !important; box-shadow:none !important;
-        transition:all .22s ease !important;
+        font-family:'Philosopher',serif !important; font-size:.95em !important; letter-spacing:.5px !important;
+        padding:11px 0 11px 21px !important; margin:3px 8px !important; box-shadow:none !important;
+        white-space:nowrap !important; overflow:hidden !important;
+        transition:all .25s ease !important; width:calc(100% - 16px) !important;
     }}
-    section[data-testid="stSidebar"] button[kind="secondary"]:hover,
-    section[data-testid="stSidebar"] button[data-testid="stBaseButton-secondary"]:hover {{
+    .st-key-nav_rail button * {{ white-space:nowrap !important; overflow:hidden !important; text-overflow:clip !important; }}
+    .st-key-nav_rail button:hover {{
         background:{T['primary']}14 !important; color:{T['primary']} !important;
-        border-left:3px solid {T['primary']}88 !important; transform:translateX(4px);
+        border-left:3px solid {T['primary']}88 !important; transform:translateX(3px);
     }}
-    .nav-sep {{ border-top:1px solid {T['primary']}33; margin:16px 0 10px 0; }}
     </style>
     """, unsafe_allow_html=True)
 
-    st.markdown('<div class="mimi-nav-brand">MIMI · AI</div>', unsafe_allow_html=True)
-    for grupo, items in NAV_GROUPS:
-        st.markdown(f'<div class="nav-group-label">{grupo}</div>', unsafe_allow_html=True)
-        for key, icon, label in items:
-            if st.session_state.page == key:
-                st.markdown(f'<div class="nav-item nav-active">{icon}&nbsp;&nbsp;{label}</div>', unsafe_allow_html=True)
-            else:
-                if st.button(f"{icon}   {label}", key=f"nav_{key}", use_container_width=True):
-                    st.session_state.page = key
-                    st.rerun()
-    st.markdown('<div class="nav-sep"></div>', unsafe_allow_html=True)
+    nav_rail = st.container(key="nav_rail")
+    with nav_rail:
+        st.markdown('<div class="rail-brand"><span class="rail-brand-icon">🏛️</span><span class="rail-brand-text">MIMI · AI</span></div>', unsafe_allow_html=True)
+        for grupo, items in NAV_GROUPS:
+            st.markdown(f'<div class="rail-group-label">{grupo}</div>', unsafe_allow_html=True)
+            for key, icon, label in items:
+                if st.session_state.page == key:
+                    st.markdown(f'<div class="rail-active">{icon}&nbsp;&nbsp;{label}</div>', unsafe_allow_html=True)
+                else:
+                    if st.button(f"{icon}   {label}", key=f"nav_{key}", use_container_width=True):
+                        st.session_state.page = key
+                        st.rerun()
 
     st.markdown(f'<div style="font-family:Cinzel,serif;color:{T["primary"]};letter-spacing:3px;text-align:center;">⚙ CONFIG</div>', unsafe_allow_html=True)
     st.markdown("---")
