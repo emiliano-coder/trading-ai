@@ -132,6 +132,36 @@ def get_precio_vivo(td_symbol, yf_symbol):
     except: pass
     return None
 
+@fragment_decorator(run_every=3)
+def precios_en_vivo(par_activo):
+    cols = st.columns(2)
+    for i, par_key in enumerate(PAIRS.keys()):
+        pc_i = PAIRS[par_key]
+        tk = get_precio_vivo(pc_i['td_symbol'], pc_i['yf_symbol'])
+        p_d   = tk['precio'] if tk else None
+        c_d   = tk['cambio'] if tk else 0
+        cp_d  = tk['cambio_pct'] if tk else 0
+        hora_d = tk['hora'][11:16] if tk else "—"
+        color = '#4CAF82' if c_d >= 0 else '#C0392B'
+        flecha = '▲' if c_d >= 0 else '▼'
+        activo_tag = " ⭐ ANALIZANDO" if par_key == par_activo else ""
+        with cols[i]:
+            if tk:
+                st.markdown(f"""
+                <div style="background:linear-gradient(90deg,{T['card']},{T['bg']},{T['card']});
+                  border:1px solid {color}44;border-radius:4px;padding:12px 16px;margin:4px 0;">
+                  <span style="font-family:'Cinzel',serif;color:{T['primary']}88;font-size:.72em;letter-spacing:2px;">{par_key} · EN VIVO · {hora_d}{activo_tag}</span><br>
+                  <span style="font-family:'Cinzel',serif;font-size:clamp(1.2rem,3.5vw,1.9rem);font-weight:900;color:{color};
+                    filter:drop-shadow(0 0 10px {color}66);">{pf(p_d,par_key)}</span>
+                  <span style="font-family:'Philosopher',serif;color:{color};font-size:.9em;margin-left:10px;">
+                    {flecha} {pf(abs(c_d),par_key)} ({cp_d:+.3f}%)
+                  </span>
+                  <div style="font-family:'Philosopher',serif;color:{T['primary']}77;font-size:.72em;margin-top:2px;">{tk['fuente']}</div>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.info(f"Sin datos en vivo — {par_key}")
+
 # ── GITHUB PERSISTENCE (un archivo por par) ───────────────────────
 def gh_file_for(par): return f"mimi_data_{PAIRS[par]['slug']}.json"
 
@@ -841,86 +871,20 @@ def monitor_automatico(par_seleccionado, stf_activo):
         pass
 
 # ── SIDEBAR ───────────────────────────────────────────────────────
+# El menú de navegación ya NO vive aquí — se movió a la página
+# principal (barra superior con categorías). La sidebar es solo CONFIG.
 NAV_GROUPS = [
-    ("PRINCIPAL",    [("senal","🎯","Señal"), ("monitor","👁️","Monitor")]),
-    ("ANÁLISIS",     [("estructura","📐","Estructura"), ("multitf","🌐","Multi-TF"), ("grafica","📊","Gráfica")]),
-    ("OPERAR",       [("paper","📋","Paper"), ("historial","📜","Historial")]),
-    ("HERRAMIENTAS", [("chat","💬","Chat"), ("alertas","🔔","Alertas"), ("backtest","📈","Backtest")]),
+    ("Principal",    [("senal","Señal"), ("monitor","Monitor")]),
+    ("Análisis",     [("estructura","Estructura"), ("multitf","Multi-TF"), ("grafica","Gráfica")]),
+    ("Operar",       [("paper","Paper"), ("historial","Historial")]),
+    ("Herramientas", [("chat","Chat"), ("alertas","Alertas"), ("backtest","Backtest")]),
 ]
 if 'page' not in st.session_state:
     st.session_state.page = 'senal'
+if 'nav_group_open' not in st.session_state:
+    st.session_state.nav_group_open = None
 
 with st.sidebar:
-    # El rail vive en su PROPIO contenedor (con key) para que solo él se
-    # angoste/expanda — el panel de CONFIG de abajo queda intacto y a
-    # ancho completo siempre, sin verse afectado por el hover del rail.
-    st.markdown(f"""
-    <style>
-    .st-key-nav_rail {{
-        width:76px; min-width:76px; max-width:76px; overflow:hidden;
-        transition:width .38s cubic-bezier(.4,0,.2,1), min-width .38s cubic-bezier(.4,0,.2,1), max-width .38s cubic-bezier(.4,0,.2,1);
-        background:linear-gradient(180deg,{T['card']},{T['bg']});
-        border:1px solid {T['primary']}22; border-radius:10px;
-        padding:18px 0 18px 0; margin-bottom:22px;
-    }}
-    .st-key-nav_rail:hover {{
-        width:300px; min-width:300px; max-width:300px;
-    }}
-    .rail-brand {{
-        display:flex; align-items:center; gap:14px; white-space:nowrap; overflow:hidden;
-        padding:2px 0 22px 18px;
-    }}
-    .rail-brand-icon {{ font-size:1.5em; flex-shrink:0; filter:drop-shadow(0 0 6px {T['primary']}66); }}
-    .rail-brand-text {{
-        font-family:'Cinzel',serif; font-weight:900; font-size:1.05em; letter-spacing:5px;
-        color:{T['primary']}; text-shadow:0 0 12px {T['primary']}44;
-    }}
-    .rail-group-label {{
-        font-family:'Cinzel',serif; font-size:.62em; letter-spacing:3px; text-transform:uppercase;
-        color:{T['primary']}55; white-space:nowrap; overflow:hidden;
-        opacity:0; max-height:0; margin:0 0 0 18px;
-        transition:opacity .3s ease .08s, max-height .3s ease, margin .3s ease;
-    }}
-    .st-key-nav_rail:hover .rail-group-label {{
-        opacity:1; max-height:30px; margin:20px 0 6px 18px;
-    }}
-    .rail-active {{
-        display:flex; align-items:center; gap:14px; white-space:nowrap; overflow:hidden;
-        font-family:'Philosopher',serif; font-size:.95em; letter-spacing:.5px;
-        padding:11px 0 11px 18px; margin:3px 8px; border-radius:6px;
-        background:linear-gradient(90deg,{T['primary']}24,transparent);
-        color:{T['primary']}; font-weight:700; border-left:3px solid {T['primary']};
-    }}
-    .st-key-nav_rail button {{
-        background:transparent !important; border:none !important;
-        border-left:3px solid transparent !important; border-radius:6px !important;
-        color:{T['primary']}99 !important; text-align:left !important;
-        font-family:'Philosopher',serif !important; font-size:.95em !important; letter-spacing:.5px !important;
-        padding:11px 0 11px 21px !important; margin:3px 8px !important; box-shadow:none !important;
-        white-space:nowrap !important; overflow:hidden !important;
-        transition:all .25s ease !important; width:calc(100% - 16px) !important;
-    }}
-    .st-key-nav_rail button * {{ white-space:nowrap !important; overflow:hidden !important; text-overflow:clip !important; }}
-    .st-key-nav_rail button:hover {{
-        background:{T['primary']}14 !important; color:{T['primary']} !important;
-        border-left:3px solid {T['primary']}88 !important; transform:translateX(3px);
-    }}
-    </style>
-    """, unsafe_allow_html=True)
-
-    nav_rail = st.container(key="nav_rail")
-    with nav_rail:
-        st.markdown('<div class="rail-brand"><span class="rail-brand-icon">🏛️</span><span class="rail-brand-text">MIMI · AI</span></div>', unsafe_allow_html=True)
-        for grupo, items in NAV_GROUPS:
-            st.markdown(f'<div class="rail-group-label">{grupo}</div>', unsafe_allow_html=True)
-            for key, icon, label in items:
-                if st.session_state.page == key:
-                    st.markdown(f'<div class="rail-active">{icon}&nbsp;&nbsp;{label}</div>', unsafe_allow_html=True)
-                else:
-                    if st.button(f"{icon}   {label}", key=f"nav_{key}", use_container_width=True):
-                        st.session_state.page = key
-                        st.rerun()
-
     st.markdown(f'<div style="font-family:Cinzel,serif;color:{T["primary"]};letter-spacing:3px;text-align:center;">⚙ CONFIG</div>', unsafe_allow_html=True)
     st.markdown("---")
 
@@ -985,13 +949,116 @@ PC  = PAIRS[PAR]
 CONTRACT = PC['contract_size']
 STF = STYLE_TF[st.session_state.trade_style]
 
-# ── HEADER ────────────────────────────────────────────────────────
-st.markdown(f"""
-<div class="greek-orn">─────── ✦ ───────</div>
-<div class="mimi-title">MIMI · AI</div>
-<div class="mimi-sub">{PAR} · Trend Following · Pullback · Price Action</div>
-<div class="greek-orn" style="margin-top:6px;">─────── ✦ ───────</div>
-""", unsafe_allow_html=True)
+# ── TOP NAV — categorías arriba de todo, ancladas mientras deslizas ──
+NAV_GROUP_OF = {}
+for _g, _items in NAV_GROUPS:
+    for _k, _label in _items:
+        NAV_GROUP_OF[_k] = _g
+
+with st.container(key="mimi_topnav"):
+    st.markdown(f"""
+    <style>
+    .st-key-mimi_topnav {{
+        position:sticky; top:0; z-index:9999;
+        background:linear-gradient(180deg,{T['bg']}f2,{T['bg']}d8);
+        backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px);
+        border-bottom:1px solid {T['primary']}33;
+        padding:12px 6px 10px 6px; margin:-1rem -1rem 18px -1rem;
+    }}
+    .st-key-mimi_topnav button {{
+        background:transparent !important; border:none !important;
+        border-bottom:2px solid transparent !important; border-radius:0 !important;
+        color:{T['primary']}80 !important;
+        font-family:'Cinzel',serif !important; letter-spacing:2.5px !important;
+        font-size:.82em !important; text-transform:uppercase !important;
+        padding:7px 4px !important; box-shadow:none !important;
+        transition:all .25s ease !important; width:100% !important;
+    }}
+    .st-key-mimi_topnav button:hover {{
+        color:{T['primary']} !important; border-bottom:2px solid {T['primary']}77 !important;
+    }}
+    .st-key-mimi_topnav button[kind="primary"] {{
+        background:transparent !important; color:{T['primary']} !important;
+        border-bottom:2px solid {T['primary']} !important; font-weight:700 !important;
+    }}
+    </style>
+    """, unsafe_allow_html=True)
+
+    grupo_abierto = st.session_state.nav_group_open
+    if grupo_abierto is None:
+        cols_nav = st.columns(len(NAV_GROUPS))
+        for i, (g, items) in enumerate(NAV_GROUPS):
+            with cols_nav[i]:
+                es_grupo_activo = NAV_GROUP_OF.get(st.session_state.page) == g
+                if st.button(g, key=f"navcat_{g}", use_container_width=True,
+                             type=("primary" if es_grupo_activo else "secondary")):
+                    st.session_state.nav_group_open = g
+                    st.rerun()
+    else:
+        items_abiertos = dict(NAV_GROUPS)[grupo_abierto]
+        cols_nav = st.columns([0.6] + [1]*len(items_abiertos))
+        with cols_nav[0]:
+            if st.button("‹ Menú", key="navcat_back", use_container_width=True):
+                st.session_state.nav_group_open = None
+                st.rerun()
+        for i, (k, label) in enumerate(items_abiertos):
+            with cols_nav[i+1]:
+                activo = st.session_state.page == k
+                if st.button(label, key=f"navitem_{k}", use_container_width=True,
+                             type=("primary" if activo else "secondary")):
+                    st.session_state.page = k
+                    st.session_state.nav_group_open = None
+                    st.rerun()
+
+# ── HERO — portada con efecto parallax al deslizar ──────────────────
+with st.container(key="mimi_hero"):
+    st.markdown(f"""
+    <style>
+    .st-key-mimi_hero {{
+        position:relative; min-height:74vh;
+        display:flex; flex-direction:column; justify-content:center; align-items:center;
+        text-align:center; padding:36px 12px 24px 12px; margin-bottom:6px; overflow:hidden;
+    }}
+    .hero-bg {{
+        position:absolute; inset:0; z-index:0;
+        background:
+            radial-gradient(circle at 28% 22%, {T['primary']}22, transparent 45%),
+            radial-gradient(circle at 76% 72%, {T['secondary']}22, transparent 50%),
+            {T['bg']};
+        background-attachment:fixed;
+    }}
+    .hero-content {{ position:relative; z-index:1; max-width:760px; }}
+    .hero-title {{
+        font-family:'Cinzel',serif; font-size:clamp(2.2rem,7vw,4rem); font-weight:900; letter-spacing:13px;
+        background:linear-gradient(180deg,#E8D5A3 0%,{T['primary']} 50%,{T['secondary']} 100%);
+        -webkit-background-clip:text; -webkit-text-fill-color:transparent;
+        filter:drop-shadow(0 0 28px {T['primary']}55); margin:10px 0;
+    }}
+    .hero-sub {{
+        font-family:'Philosopher',serif; font-style:italic; color:{T['primary']}99;
+        font-size:1em; letter-spacing:4px; margin-bottom:18px;
+    }}
+    .hero-oracle {{
+        font-family:'Philosopher',serif; color:{T['primary']}bb; font-size:1.05em;
+        line-height:1.75; max-width:600px; margin:0 auto 30px auto;
+    }}
+    .hero-scroll-hint {{
+        font-family:'Cinzel',serif; color:{T['primary']}55; font-size:.68em; letter-spacing:3px;
+        margin-top:30px; animation:hero-bounce 2.2s ease-in-out infinite;
+    }}
+    @keyframes hero-bounce {{ 0%,100%{{transform:translateY(0);}} 50%{{transform:translateY(8px);}} }}
+    </style>
+    <div class="hero-bg"></div>
+    <div class="hero-content">
+      <div class="greek-orn">─────── ✦ ───────</div>
+      <div class="hero-title">MIMI · AI</div>
+      <div class="hero-sub">XAU/USD · EUR/USD · Trend Following · Pullback · Price Action</div>
+      <div class="hero-oracle">El Oráculo analiza el oro y el euro-dólar con tendencia, pullback y confirmación de
+      precio — disciplina estoica, sin ruido, sin promesas vacías. Cada señal se mide, se justifica y se registra.</div>
+    </div>
+    """, unsafe_allow_html=True)
+    precios_en_vivo(PAR)
+    st.markdown('<div class="hero-scroll-hint">── desliza para entrar ──</div>', unsafe_allow_html=True)
 
 # ── DATA ──────────────────────────────────────────────────────────
 @st.cache_data(ttl=300)
@@ -1073,36 +1140,6 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # ── PRECIO EN VIVO — se actualiza solo cada 3s, SIN recargar la app ──
-@fragment_decorator(run_every=3)
-def precios_en_vivo(par_activo):
-    cols = st.columns(2)
-    for i, par_key in enumerate(PAIRS.keys()):
-        pc_i = PAIRS[par_key]
-        tk = get_precio_vivo(pc_i['td_symbol'], pc_i['yf_symbol'])
-        p_d   = tk['precio'] if tk else None
-        c_d   = tk['cambio'] if tk else 0
-        cp_d  = tk['cambio_pct'] if tk else 0
-        hora_d = tk['hora'][11:16] if tk else "—"
-        color = '#4CAF82' if c_d >= 0 else '#C0392B'
-        flecha = '▲' if c_d >= 0 else '▼'
-        activo_tag = " ⭐ ANALIZANDO" if par_key == par_activo else ""
-        with cols[i]:
-            if tk:
-                st.markdown(f"""
-                <div style="background:linear-gradient(90deg,{T['card']},{T['bg']},{T['card']});
-                  border:1px solid {color}44;border-radius:4px;padding:12px 16px;margin:4px 0;">
-                  <span style="font-family:'Cinzel',serif;color:{T['primary']}88;font-size:.72em;letter-spacing:2px;">{par_key} · EN VIVO · {hora_d}{activo_tag}</span><br>
-                  <span style="font-family:'Cinzel',serif;font-size:clamp(1.2rem,3.5vw,1.9rem);font-weight:900;color:{color};
-                    filter:drop-shadow(0 0 10px {color}66);">{pf(p_d,par_key)}</span>
-                  <span style="font-family:'Philosopher',serif;color:{color};font-size:.9em;margin-left:10px;">
-                    {flecha} {pf(abs(c_d),par_key)} ({cp_d:+.3f}%)
-                  </span>
-                  <div style="font-family:'Philosopher',serif;color:{T['primary']}77;font-size:.72em;margin-top:2px;">{tk['fuente']}</div>
-                </div>
-                """, unsafe_allow_html=True)
-            else:
-                st.info(f"Sin datos en vivo — {par_key}")
-
 precios_en_vivo(PAR)
 monitor_automatico(PAR, STF)
 
@@ -1115,7 +1152,7 @@ c5.metric("💰 Capital", f"${st.session_state.capital:,.2f}")
 c6.metric("⏱️ Timeframes", STF['label'])
 st.markdown('<div class="greek-orn">── ✦ ──</div>', unsafe_allow_html=True)
 
-# ── CONTENIDO — controlado por la navegación de la sidebar ─────────
+# ── CONTENIDO — controlado por la barra de navegación superior ─────
 
 # ── TAB 1: SEÑAL ──────────────────────────────────────────────────
 if st.session_state.page == 'senal':
