@@ -214,6 +214,7 @@ def gh_save_config(cfg):
 if 'par_loaded' not in st.session_state:
     cfg = gh_load_config()
     st.session_state.par = cfg.get('par', "XAU/USD 🥇")
+    st.session_state.tema = cfg.get('tema', "Mármol Griego")
     st.session_state.par_loaded = True
 
 def cargar_estado_par(par):
@@ -232,15 +233,20 @@ if 'loaded_par' not in st.session_state or st.session_state.loaded_par != st.ses
     st.session_state.chat_history = []
 
 # ── THEMES ───────────────────────────────────────────────────────
+# Mármol Griego = mármol blanco/plateado real (ya no dorado — ese look se
+# lo quedó Bronce Estoico). Athena renombrado a Agamenón (negro + mármol/oro,
+# inspirado en su armadura). Púrpura Imperial reemplazado por Grecia
+# Contemporánea, basado en la paleta de 5 tonos que mandaste.
 THEMES = {
-    "Mármol Griego":   {"primary":"#C8A96E","secondary":"#8B6914","bg":"#0a0905","card":"#13100a"},
-    "Bronce Estoico":  {"primary":"#CD7F32","secondary":"#8B4513","bg":"#080503","card":"#120a05"},
-    "Lapislázuli":     {"primary":"#6B8FCE","secondary":"#3A5A9B","bg":"#03060f","card":"#070b18"},
-    "Olimpo Oscuro":   {"primary":"#9B7FD4","secondary":"#6B4FA0","bg":"#060308","card":"#0d0614"},
-    "Athena":          {"primary":"#7BAF9E","secondary":"#3D7A68","bg":"#030a08","card":"#06120f"},
-    "Ónix Espartano":  {"primary":"#B33A3A","secondary":"#6E1F1F","bg":"#070505","card":"#100b0b"},
-    "Laurel de Delfos":{"primary":"#8FB08C","secondary":"#4C6B4A","bg":"#050a06","card":"#0a120b"},
-    "Púrpura Imperial":{"primary":"#A97FD0","secondary":"#5E3B87","bg":"#08050c","card":"#120a18"},
+    "Mármol Griego":       {"primary":"#E9E4D8","secondary":"#AFA28C","bg":"#0b0b0a","card":"#141311"},
+    "Bronce Estoico":      {"primary":"#C8A96E","secondary":"#8B6914","bg":"#0a0905","card":"#13100a"},
+    "Lapislázuli":         {"primary":"#6B8FCE","secondary":"#3A5A9B","bg":"#03060f","card":"#070b18"},
+    "Olimpo Oscuro":       {"primary":"#9B7FD4","secondary":"#6B4FA0","bg":"#060308","card":"#0d0614"},
+    "Agamenón":            {"primary":"#D4C9A8","secondary":"#5C5347","bg":"#050505","card":"#0d0d0c"},
+    "Ónix Espartano":      {"primary":"#B33A3A","secondary":"#6E1F1F","bg":"#070505","card":"#100b0b"},
+    "Laurel de Delfos":    {"primary":"#8FB08C","secondary":"#4C6B4A","bg":"#050a06","card":"#0a120b"},
+    "Grecia Contemporánea":{"primary":"#6FA09C","secondary":"#B0A093","bg":"#070a09","card":"#0d1211",
+                             "palette":["#D4E1E0","#9DBFBC","#6FA09C","#D3CCC0","#B0A093"]},
 }
 if 'tema' not in st.session_state: st.session_state.tema = "Mármol Griego"
 T = THEMES.get(st.session_state.tema, THEMES["Mármol Griego"])
@@ -924,19 +930,26 @@ if 'nav_group_open' not in st.session_state:
     st.session_state.nav_group_open = None
 
 with st.sidebar:
-    st.markdown(f'<div style="font-family:Cinzel,serif;color:{T["primary"]};letter-spacing:3px;text-align:center;">⚙ CONFIG</div>', unsafe_allow_html=True)
+    st.markdown(f'<div style="font-family:Cinzel,serif;color:{T["primary"]};letter-spacing:3px;text-align:center;">⚙ CONFIG</div><div class="meander-divider" style="margin:6px 0 10px 0;"></div>', unsafe_allow_html=True)
     st.markdown("---")
 
     nuevo_par = st.selectbox("💱 Par", list(PAIRS.keys()), index=list(PAIRS.keys()).index(st.session_state.par))
     if nuevo_par != st.session_state.par:
         st.session_state.par = nuevo_par
-        gh_save_config({'par': nuevo_par})
+        cfg_par = gh_load_config(); cfg_par['par'] = nuevo_par; cfg_par['tema'] = st.session_state.tema
+        gh_save_config(cfg_par)
         cargar_estado_par(nuevo_par)
         st.rerun()
 
     nuevo_tema = st.selectbox("🏛️ Estilo visual", list(THEMES.keys()), index=list(THEMES.keys()).index(st.session_state.tema))
     if nuevo_tema != st.session_state.tema:
-        st.session_state.tema = nuevo_tema; st.rerun()
+        st.session_state.tema = nuevo_tema
+        cfg_tema = gh_load_config(); cfg_tema['tema'] = nuevo_tema; cfg_tema['par'] = st.session_state.par
+        gh_save_config(cfg_tema)
+        st.rerun()
+    if THEMES[st.session_state.tema].get('palette'):
+        swatches = "".join([f'<span style="display:inline-block;width:18px;height:18px;border-radius:3px;background:{c};margin-right:4px;border:1px solid #0004;"></span>' for c in THEMES[st.session_state.tema]['palette']])
+        st.markdown(f'<div style="margin:-4px 0 8px 2px;">{swatches}</div>', unsafe_allow_html=True)
 
     if st.session_state.par == "XAU/USD 🥇":
         nueva_estrat = st.selectbox("📐 Estrategia", ["Trend + Pullback (EMA)", "Initial Balance Breakout (NY Open)"],
@@ -1002,7 +1015,16 @@ with st.container(key="mimi_topnav"):
         background:linear-gradient(180deg,{T['bg']}f2,{T['bg']}d8);
         backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px);
         border-bottom:1px solid {T['primary']}33;
-        padding:12px 6px 10px 6px; margin:-1rem -1rem 18px -1rem;
+        padding:12px 6px 10px 6px; margin:-1rem -1rem 26px -1rem;
+        position:relative;
+    }}
+    .st-key-mimi_topnav::after {{
+        content:''; position:absolute; left:0; right:0; bottom:-8px; height:8px;
+        background-image:repeating-linear-gradient(90deg,
+            {T['primary']} 0 3px, transparent 3px 6px, transparent 6px 9px, {T['primary']} 9px 12px,
+            {T['primary']} 12px 15px, transparent 15px 24px);
+        background-size:24px 8px; background-repeat:repeat-x; background-position:center;
+        opacity:.4;
     }}
     .st-key-mimi_topnav button {{
         background:transparent !important; border:none !important;
@@ -1087,48 +1109,100 @@ def render_ticker_noticias():
     </div>
     """, unsafe_allow_html=True)
 
-# ── HERO / SPLASH — portada de presentación con parallax, se cierra sola ──
+# ── HERO / SPLASH — portada minimalista, se cierra sola a los 12s ──
 if 'hero_dismissed' not in st.session_state:
     st.session_state.hero_dismissed = False
     st.session_state.hero_shown_at = time.time()
+
+HERO_DURACION_SEG = 12
+
+# Silueta decorativa en SVG (formas geométricas, no fotorrealista): figura
+# sentada de perfil, girada un poco hacia el espectador, brazo extendido
+# dejando caer monedas — en tonos mármol/dorado sobre fondo negro.
+SOCRATES_SVG = """
+<svg viewBox="0 0 500 620" class="hero-statue" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="marmol" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#efe9dc"/>
+      <stop offset="45%" stop-color="#c9c0ab"/>
+      <stop offset="100%" stop-color="#847c68"/>
+    </linearGradient>
+    <linearGradient id="oroMoneda" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f1d98a"/>
+      <stop offset="100%" stop-color="#b8912f"/>
+    </linearGradient>
+  </defs>
+  <ellipse cx="230" cy="560" rx="150" ry="14" fill="#000" opacity="0.35"/>
+  <rect x="150" y="535" width="170" height="20" rx="2" fill="url(#marmol)" opacity="0.9"/>
+  <path d="M195,530 C160,528 138,470 145,410 C152,340 178,285 222,255
+           C238,244 262,242 280,250 C318,266 335,320 328,385
+           C324,430 320,485 308,522 C303,532 288,536 268,534
+           C240,531 215,532 195,530 Z" fill="url(#marmol)"/>
+  <path d="M205,300 C220,340 218,400 205,460" stroke="#5c5747" stroke-width="2" opacity="0.35" fill="none"/>
+  <path d="M240,270 C252,330 250,410 238,500" stroke="#5c5747" stroke-width="2" opacity="0.3" fill="none"/>
+  <path d="M275,260 C288,320 286,400 274,480" stroke="#5c5747" stroke-width="2" opacity="0.3" fill="none"/>
+  <ellipse cx="262" cy="200" rx="34" ry="40" fill="url(#marmol)"/>
+  <path d="M232,190 C230,165 248,148 268,150 C288,152 300,172 296,192
+           C292,182 280,176 266,178 C252,180 240,186 232,190 Z" fill="url(#marmol)"/>
+  <path d="M285,258 C310,275 332,300 345,335 C352,354 356,375 358,398"
+        stroke="url(#marmol)" stroke-width="20" stroke-linecap="round" fill="none"/>
+  <circle cx="360" cy="405" r="13" fill="url(#marmol)"/>
+  <circle cx="372" cy="440" r="6" fill="url(#oroMoneda)"/>
+  <circle cx="358" cy="462" r="5.5" fill="url(#oroMoneda)"/>
+  <circle cx="378" cy="478" r="6.5" fill="url(#oroMoneda)"/>
+  <circle cx="352" cy="492" r="5" fill="url(#oroMoneda)"/>
+  <ellipse cx="368" cy="512" rx="9" ry="4" fill="url(#oroMoneda)" opacity="0.9"/>
+  <ellipse cx="344" cy="518" rx="8" ry="3.5" fill="url(#oroMoneda)" opacity="0.85"/>
+  <ellipse cx="386" cy="522" rx="7.5" ry="3.2" fill="url(#oroMoneda)" opacity="0.8"/>
+</svg>
+"""
 
 if not st.session_state.hero_dismissed:
     with st.container(key="mimi_hero"):
         st.markdown(f"""
         <style>
         .st-key-mimi_hero {{
-            position:relative; min-height:82vh;
+            position:relative; min-height:88vh;
             display:flex; flex-direction:column; justify-content:center; align-items:center;
             text-align:center; padding:36px 12px 24px 12px; margin-bottom:6px; overflow:hidden;
-            animation:hero-fadein 1s ease;
+            animation:hero-fadein 1.2s ease; background:#000;
         }}
         @keyframes hero-fadein {{ from{{opacity:0;}} to{{opacity:1;}} }}
         .hero-bg {{
             position:absolute; inset:0; z-index:0;
             background:
-                radial-gradient(circle at 24% 20%, {T['primary']}26, transparent 45%),
-                radial-gradient(circle at 78% 74%, {T['secondary']}26, transparent 50%),
-                radial-gradient(circle at 50% 95%, {T['primary']}14, transparent 40%),
-                {T['bg']};
+                radial-gradient(circle at 30% 25%, {T['primary']}14, transparent 45%),
+                radial-gradient(circle at 75% 70%, {T['secondary']}12, transparent 50%),
+                #000;
             background-attachment:fixed;
         }}
+        .hero-statue-wrap {{
+            position:absolute; right:2%; bottom:0; z-index:0;
+            width:min(46vw,420px); opacity:0.55; filter:drop-shadow(0 0 40px {T['primary']}22);
+        }}
+        .hero-statue {{ width:100%; height:auto; }}
         .hero-content {{ position:relative; z-index:1; max-width:760px; }}
+        .hero-meander-top, .hero-meander-bottom {{
+            height:14px; width:min(90vw,520px); margin:0 auto;
+            background-image:repeating-linear-gradient(90deg,
+                {T['primary']} 0 4px, transparent 4px 8px, transparent 8px 12px, {T['primary']} 12px 16px,
+                {T['primary']} 16px 20px, transparent 20px 32px);
+            background-size:32px 14px; background-repeat:repeat-x; background-position:center;
+            opacity:.55;
+        }}
+        .hero-meander-top {{ margin-bottom:22px; }}
+        .hero-meander-bottom {{ margin-top:22px; }}
         .hero-title {{
-            font-family:'Cinzel',serif; font-size:clamp(2.2rem,7vw,4rem); font-weight:900; letter-spacing:13px;
-            background:linear-gradient(180deg,#E8D5A3 0%,{T['primary']} 50%,{T['secondary']} 100%);
+            font-family:'Cinzel',serif; font-size:clamp(2.4rem,8vw,4.6rem); font-weight:900; letter-spacing:14px;
+            background:linear-gradient(180deg,#F3ECD8 0%,{T['primary']} 50%,{T['secondary']} 100%);
             -webkit-background-clip:text; -webkit-text-fill-color:transparent;
-            filter:drop-shadow(0 0 28px {T['primary']}55); margin:10px 0;
+            filter:drop-shadow(0 0 32px {T['primary']}66); margin:10px 0;
         }}
-        .hero-sub {{
-            font-family:'Philosopher',serif; font-style:italic; color:{T['primary']}99;
-            font-size:1em; letter-spacing:4px; margin-bottom:18px;
-        }}
-        .hero-oracle {{
-            font-family:'Philosopher',serif; color:{T['primary']}bb; font-size:1.05em;
-            line-height:1.75; max-width:600px; margin:0 auto 30px auto;
+        .hero-glyphs {{
+            font-size:1.3em; letter-spacing:22px; color:{T['primary']}88; margin-top:18px;
         }}
         .hero-loading-bar {{
-            width:180px; height:2px; background:{T['primary']}22; margin:26px auto 8px auto;
+            width:180px; height:2px; background:{T['primary']}22; margin:30px auto 0 auto;
             border-radius:2px; overflow:hidden; position:relative;
         }}
         .hero-loading-bar::after {{
@@ -1137,23 +1211,17 @@ if not st.session_state.hero_dismissed:
             animation:hero-load 1.6s ease-in-out infinite;
         }}
         @keyframes hero-load {{ 0%{{left:-40%;}} 100%{{left:100%;}} }}
-        .hero-scroll-hint {{
-            font-family:'Cinzel',serif; color:{T['primary']}55; font-size:.68em; letter-spacing:3px;
-            margin-top:4px;
-        }}
         </style>
         <div class="hero-bg"></div>
+        <div class="hero-statue-wrap">{SOCRATES_SVG}</div>
         <div class="hero-content">
-          <div class="greek-orn">─────── ✦ ───────</div>
+          <div class="hero-meander-top"></div>
           <div class="hero-title">MIMI · AI</div>
-          <div class="hero-sub">XAU/USD · EUR/USD · Trend Following · Pullback · Price Action</div>
-          <div class="hero-oracle">El Oráculo analiza el oro y el euro-dólar con tendencia, pullback y confirmación de
-          precio — disciplina estoica, sin ruido, sin promesas vacías. Cada señal se mide, se justifica y se registra.</div>
+          <div class="hero-glyphs">✦ 𓂀 ⚱ ✦</div>
+          <div class="hero-meander-bottom"></div>
         </div>
         """, unsafe_allow_html=True)
-        precios_en_vivo(PAR)
-        render_ticker_noticias()
-        st.markdown('<div class="hero-loading-bar"></div><div class="hero-scroll-hint">preparando el oráculo</div>', unsafe_allow_html=True)
+        st.markdown('<div class="hero-loading-bar"></div>', unsafe_allow_html=True)
         c_skip1, c_skip2, c_skip3 = st.columns([1,1,1])
         with c_skip2:
             if st.button("Entrar ahora →", key="hero_skip", use_container_width=True):
@@ -1162,7 +1230,7 @@ if not st.session_state.hero_dismissed:
 
     @fragment_decorator(run_every=1)
     def _hero_autodismiss():
-        if not st.session_state.hero_dismissed and (time.time() - st.session_state.hero_shown_at) > 3.5:
+        if not st.session_state.hero_dismissed and (time.time() - st.session_state.hero_shown_at) > HERO_DURACION_SEG:
             st.session_state.hero_dismissed = True
             st.rerun(scope="app")
     _hero_autodismiss()
@@ -1249,6 +1317,7 @@ st.markdown(f"""
 # ── PRECIO EN VIVO — se actualiza solo cada 3s, SIN recargar la app ──
 precios_en_vivo(PAR)
 monitor_automatico(PAR, STF)
+render_ticker_noticias()
 
 c1,c2,c3,c4,c5,c6 = st.columns(6)
 c1.metric("📈 Tendencia", senal['tendencia'])
