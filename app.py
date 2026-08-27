@@ -5,7 +5,7 @@ import yfinance as yf
 import ta
 import pytz
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 import random
 import warnings
 import requests
@@ -558,6 +558,7 @@ def analizar_imagen_grafica(image_bytes, mime_type, contexto_extra=""):
 
 def parse_tg_command(txt):
     t = txt.lower().strip()
+    if any(w in t for w in ['bitácora','bitacora','historial completo','resumen 2 dias','resumen dos dias','log']): return 'BITACORA'
     if any(w in t for w in ['entré','entre','sí entro','si entro','entro','long','short','sí','si']): return 'ENTRO'
     if any(w in t for w in ['no','no entro','no entré','cancelar','rechazar']): return 'NO_ENTRO'
     if any(w in t for w in ['me quedo','quedo','mantener','mantén','hold','seguir']): return 'MANTENER'
@@ -632,8 +633,10 @@ def process_tg_updates(par, senal, score, risk_pct, contract_size):
                 send_tg(f"📊 Sin posición — {tag}. Score actual: {score['total']}% ({score['categoria']})\nCapital: ${st.session_state.capital:,.2f}")
         elif cmd == 'SEÑAL':
             send_tg(f"🏛️ *MIMI-AI — {tag}*\nTendencia: {senal['tendencia']}\nSetup: {' · '.join(senal['razon']) if senal['razon'] else 'Sin confluencia aún'}\nScore: {score['total']}% ({score['categoria']})\nPrecio: {pf(precio,par)} | SL: {pf(senal['sl'],par)} | TP: {pf(senal['tp'],par)}")
+        elif cmd == 'BITACORA':
+            send_tg(generar_bitacora_2dias())
         elif cmd == 'TEXTO_LIBRE':
-            send_tg(f"🏛️ Score actual: {score['total']}% — {score['categoria']}\nTendencia: {senal['tendencia']}\nComandos: entré · no · salgo · estado · señal · me quedo")
+            send_tg(f"🏛️ Score actual: {score['total']}% — {score['categoria']}\nTendencia: {senal['tendencia']}\nComandos: entré · no · salgo · estado · señal · me quedo · bitácora")
 
     sv2 = {'paper_trades':st.session_state.paper_trades,'signal_history':st.session_state.signal_history[-50:],
            'capital':st.session_state.capital,'trade_style':st.session_state.trade_style,
@@ -717,6 +720,13 @@ def notificar(msg, icon="🏛️"):
     except Exception:
         pass
 
+def log_alerta(sv, tipo, **kw):
+    """Guarda un renglón de bitácora cada vez que se manda una alerta real por Telegram."""
+    entry = {'fecha': datetime.now(pytz.timezone('America/Mexico_City')).strftime('%d/%m %H:%M'), 'tipo': tipo}
+    entry.update(kw)
+    sv.setdefault('alertas_enviadas', []).append(entry)
+    sv['alertas_enviadas'] = sv['alertas_enviadas'][-150:]  # no crecer sin límite
+
 def evaluar_y_notificar_par(par, es_par_activo, stf_usar):
     pc = PAIRS[par]
     df_t = get_data(pc['yf_symbol'], stf_usar['trend_interval'], stf_usar['trend_period'])
@@ -770,6 +780,7 @@ def evaluar_y_notificar_par(par, es_par_activo, stf_usar):
                     f"Calidad: {sc_['total']}%\n"
                     f"Razón: {razon_txt}\n\n"
                     f"🔭 *Escenarios:*\n{esc_txt}", icon="🎯")
+            log_alerta(sv, 'SEÑAL', dir=dir_txt, precio=sen['precio'], score=sc_['total'])
             sv['last_entry_alert'] = {'direccion': sen['direccion'], 'ts': ahora_ts}
             if es_par_activo: st.session_state.last_entry_alert = sv['last_entry_alert']
             cambios = True
@@ -792,6 +803,7 @@ def evaluar_y_notificar_par(par, es_par_activo, stf_usar):
             t['tp1_hit'] = True
             t['sl'] = t['entrada']
             notificar(f"🎯 *TP1 ALCANZADO — {tag}*\nParcial ganado ✅\nSL movido a breakeven ({pf(t['entrada'],par)}).\nSigue corriendo hacia TP2: {pf(t['tp2'],par)}", icon="🎯")
+            log_alerta(sv, 'TP1', dir=t['dir'], precio=precio_t)
             cambios = True
 
         tocó_tp2 = (dirlong and precio_t >= t['tp2']) or (not dirlong and precio_t <= t['tp2'])
@@ -800,12 +812,14 @@ def evaluar_y_notificar_par(par, es_par_activo, stf_usar):
             pnl_final = (t['tp2']-t['entrada'])*t['lotes']*pc['contract_size'] if dirlong else (t['entrada']-t['tp2'])*t['lotes']*pc['contract_size']
             t['estado']='CERRADO'; t['pnl']=round(pnl_final,2); t['resultado']='WIN ✅'
             notificar(f"🏁 *TP2 ALCANZADO — {tag}* 🟢\nOperación cerrada en {pf(t['tp2'],par)}\nP&L total: +${t['pnl']:.2f}", icon="🏁")
+            log_alerta(sv, 'TP2', dir=t['dir'], precio=t['tp2'], pnl=t['pnl'])
             cambios = True
         elif tocó_sl:
             pnl_final = (t['sl']-t['entrada'])*t['lotes']*pc['contract_size'] if dirlong else (t['entrada']-t['sl'])*t['lotes']*pc['contract_size']
             t['estado']='CERRADO'; t['pnl']=round(pnl_final,2)
             t['resultado']='WIN ✅' if pnl_final>0 else 'LOSS ❌'
             notificar(f"🛑 *SL ALCANZADO — {tag}*{' (breakeven, parcial ya asegurado)' if t['tp1_hit'] else ''}\nOperación cerrada en {pf(t['sl'],par)}\nP&L: {'+' if pnl_final>0 else ''}${pnl_final:.2f}", icon="🛑")
+            log_alerta(sv, 'SL', dir=t['dir'], precio=t['sl'], pnl=t['pnl'])
             cambios = True
         else:
             dist_sl = abs(precio_t - t['sl'])
@@ -843,6 +857,7 @@ def evaluar_y_notificar_par(par, es_par_activo, stf_usar):
                         f"Recomendación: {recomendacion}\n"
                         f"Justificación: {justificacion}\n\n"
                         f"🔭 *Escenarios:*\n{esc_txt}", icon="📊")
+                log_alerta(sv, 'SEGUIMIENTO', dir=t['dir'], precio=precio_t, pnl=round(pnl,2), recomendacion=recomendacion)
                 t['last_followup_ts'] = ahora_ts
                 cambios = True
 
@@ -853,6 +868,38 @@ def evaluar_y_notificar_par(par, es_par_activo, stf_usar):
             st.session_state.paper_trades = trades
             st.session_state.capital = sv['capital']
         gh_save(par, sv)
+
+def generar_bitacora_2dias():
+    """Junta todas las alertas reales mandadas por Telegram (señales, TP1/TP2/SL,
+    seguimientos) de los últimos 2 días, para los dos pares."""
+    mx = pytz.timezone('America/Mexico_City')
+    hoy = datetime.now(mx)
+    ayer = hoy - timedelta(days=1)
+    fechas_validas = (hoy.strftime('%d/%m'), ayer.strftime('%d/%m'))
+    emoji_map = {'SEÑAL':'🎯','TP1':'🎯','TP2':'🏁','SL':'🛑','SEGUIMIENTO':'📊'}
+    lineas = ["📜 *BITÁCORA — últimos 2 días*"]
+    total = 0
+    for par_k in PAIRS.keys():
+        alertas = gh_load(par_k).get('alertas_enviadas', [])
+        recientes = [a for a in alertas if str(a.get('fecha','')).startswith(fechas_validas)]
+        tag = par_k.split()[0]
+        if not recientes:
+            lineas.append(f"\n*{tag}* — sin eventos en este periodo.")
+            continue
+        lineas.append(f"\n*{tag}* — {len(recientes)} eventos")
+        for a in recientes[-20:]:
+            e = emoji_map.get(a.get('tipo'), '•')
+            extra = f" {a['dir']}" if a.get('dir') else ""
+            precio_txt = f" @ {pf(a['precio'],par_k)}" if 'precio' in a else ""
+            score_txt = f" · {a['score']}%" if 'score' in a else ""
+            pnl_txt = f" · P&L {'+' if a.get('pnl',0)>0 else ''}{a.get('pnl',0):.2f}" if 'pnl' in a else ""
+            lineas.append(f"{a.get('fecha','')} {e} {a.get('tipo')}{extra}{precio_txt}{score_txt}{pnl_txt}")
+        total += len(recientes)
+    lineas.append(f"\nTotal: {total} eventos registrados en 2 días.")
+    texto = "\n".join(lineas)
+    if len(texto) > 3900:
+        texto = texto[:3880] + "\n… (recortado — hay más actividad de la que cabe en un mensaje de Telegram)"
+    return texto
 
 def enviar_resumen_diario():
     mx = pytz.timezone('America/Mexico_City')
@@ -981,7 +1028,7 @@ with st.sidebar:
     st.caption("Ambos pares se revisan cada 60s mientras esta pestaña esté abierta. Umbral de señal: 58% (80% en sesión asiática). Máx. 1 operación abierta por par. Resumen diario a las 23:30 UTC.")
     st.markdown("---")
     st.markdown(f'<div style="font-family:Cinzel,serif;color:{T["primary"]}99;font-size:.8em;letter-spacing:2px;">📱 TELEGRAM COMANDOS</div>', unsafe_allow_html=True)
-    st.caption("entré · no · salgo · estado · señal · me quedo")
+    st.caption("entré · no · salgo · estado · señal · me quedo · bitácora")
     st.markdown("---")
     st.markdown(f'<div style="font-family:Cinzel,serif;color:{T["primary"]}99;font-size:.8em;letter-spacing:2px;">📚 GUÍA</div>', unsafe_allow_html=True)
     for titulo, texto in [
@@ -1108,132 +1155,6 @@ def render_ticker_noticias():
       </div>
     </div>
     """, unsafe_allow_html=True)
-
-# ── HERO / SPLASH — portada minimalista, se cierra sola a los 12s ──
-if 'hero_dismissed' not in st.session_state:
-    st.session_state.hero_dismissed = False
-    st.session_state.hero_shown_at = time.time()
-
-HERO_DURACION_SEG = 12
-
-# Silueta decorativa en SVG (formas geométricas, no fotorrealista): figura
-# sentada de perfil, girada un poco hacia el espectador, brazo extendido
-# dejando caer monedas — en tonos mármol/dorado sobre fondo negro.
-SOCRATES_SVG = """
-<svg viewBox="0 0 500 620" class="hero-statue" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <linearGradient id="marmol" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#efe9dc"/>
-      <stop offset="45%" stop-color="#c9c0ab"/>
-      <stop offset="100%" stop-color="#847c68"/>
-    </linearGradient>
-    <linearGradient id="oroMoneda" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#f1d98a"/>
-      <stop offset="100%" stop-color="#b8912f"/>
-    </linearGradient>
-  </defs>
-  <ellipse cx="230" cy="560" rx="150" ry="14" fill="#000" opacity="0.35"/>
-  <rect x="150" y="535" width="170" height="20" rx="2" fill="url(#marmol)" opacity="0.9"/>
-  <path d="M195,530 C160,528 138,470 145,410 C152,340 178,285 222,255
-           C238,244 262,242 280,250 C318,266 335,320 328,385
-           C324,430 320,485 308,522 C303,532 288,536 268,534
-           C240,531 215,532 195,530 Z" fill="url(#marmol)"/>
-  <path d="M205,300 C220,340 218,400 205,460" stroke="#5c5747" stroke-width="2" opacity="0.35" fill="none"/>
-  <path d="M240,270 C252,330 250,410 238,500" stroke="#5c5747" stroke-width="2" opacity="0.3" fill="none"/>
-  <path d="M275,260 C288,320 286,400 274,480" stroke="#5c5747" stroke-width="2" opacity="0.3" fill="none"/>
-  <ellipse cx="262" cy="200" rx="34" ry="40" fill="url(#marmol)"/>
-  <path d="M232,190 C230,165 248,148 268,150 C288,152 300,172 296,192
-           C292,182 280,176 266,178 C252,180 240,186 232,190 Z" fill="url(#marmol)"/>
-  <path d="M285,258 C310,275 332,300 345,335 C352,354 356,375 358,398"
-        stroke="url(#marmol)" stroke-width="20" stroke-linecap="round" fill="none"/>
-  <circle cx="360" cy="405" r="13" fill="url(#marmol)"/>
-  <circle cx="372" cy="440" r="6" fill="url(#oroMoneda)"/>
-  <circle cx="358" cy="462" r="5.5" fill="url(#oroMoneda)"/>
-  <circle cx="378" cy="478" r="6.5" fill="url(#oroMoneda)"/>
-  <circle cx="352" cy="492" r="5" fill="url(#oroMoneda)"/>
-  <ellipse cx="368" cy="512" rx="9" ry="4" fill="url(#oroMoneda)" opacity="0.9"/>
-  <ellipse cx="344" cy="518" rx="8" ry="3.5" fill="url(#oroMoneda)" opacity="0.85"/>
-  <ellipse cx="386" cy="522" rx="7.5" ry="3.2" fill="url(#oroMoneda)" opacity="0.8"/>
-</svg>
-"""
-
-if not st.session_state.hero_dismissed:
-    with st.container(key="mimi_hero"):
-        st.markdown(f"""
-        <style>
-        .st-key-mimi_hero {{
-            position:relative; min-height:88vh;
-            display:flex; flex-direction:column; justify-content:center; align-items:center;
-            text-align:center; padding:36px 12px 24px 12px; margin-bottom:6px; overflow:hidden;
-            animation:hero-fadein 1.2s ease; background:#000;
-        }}
-        @keyframes hero-fadein {{ from{{opacity:0;}} to{{opacity:1;}} }}
-        .hero-bg {{
-            position:absolute; inset:0; z-index:0;
-            background:
-                radial-gradient(circle at 30% 25%, {T['primary']}14, transparent 45%),
-                radial-gradient(circle at 75% 70%, {T['secondary']}12, transparent 50%),
-                #000;
-            background-attachment:fixed;
-        }}
-        .hero-statue-wrap {{
-            position:absolute; right:2%; bottom:0; z-index:0;
-            width:min(46vw,420px); opacity:0.55; filter:drop-shadow(0 0 40px {T['primary']}22);
-        }}
-        .hero-statue {{ width:100%; height:auto; }}
-        .hero-content {{ position:relative; z-index:1; max-width:760px; }}
-        .hero-meander-top, .hero-meander-bottom {{
-            height:14px; width:min(90vw,520px); margin:0 auto;
-            background-image:repeating-linear-gradient(90deg,
-                {T['primary']} 0 4px, transparent 4px 8px, transparent 8px 12px, {T['primary']} 12px 16px,
-                {T['primary']} 16px 20px, transparent 20px 32px);
-            background-size:32px 14px; background-repeat:repeat-x; background-position:center;
-            opacity:.55;
-        }}
-        .hero-meander-top {{ margin-bottom:22px; }}
-        .hero-meander-bottom {{ margin-top:22px; }}
-        .hero-title {{
-            font-family:'Cinzel',serif; font-size:clamp(2.4rem,8vw,4.6rem); font-weight:900; letter-spacing:14px;
-            background:linear-gradient(180deg,#F3ECD8 0%,{T['primary']} 50%,{T['secondary']} 100%);
-            -webkit-background-clip:text; -webkit-text-fill-color:transparent;
-            filter:drop-shadow(0 0 32px {T['primary']}66); margin:10px 0;
-        }}
-        .hero-glyphs {{
-            font-size:1.3em; letter-spacing:22px; color:{T['primary']}88; margin-top:18px;
-        }}
-        .hero-loading-bar {{
-            width:180px; height:2px; background:{T['primary']}22; margin:30px auto 0 auto;
-            border-radius:2px; overflow:hidden; position:relative;
-        }}
-        .hero-loading-bar::after {{
-            content:''; position:absolute; left:-40%; top:0; height:100%; width:40%;
-            background:{T['primary']}; border-radius:2px;
-            animation:hero-load 1.6s ease-in-out infinite;
-        }}
-        @keyframes hero-load {{ 0%{{left:-40%;}} 100%{{left:100%;}} }}
-        </style>
-        <div class="hero-bg"></div>
-        <div class="hero-statue-wrap">{SOCRATES_SVG}</div>
-        <div class="hero-content">
-          <div class="hero-meander-top"></div>
-          <div class="hero-title">MIMI · AI</div>
-          <div class="hero-glyphs">✦ 𓂀 ⚱ ✦</div>
-          <div class="hero-meander-bottom"></div>
-        </div>
-        """, unsafe_allow_html=True)
-        st.markdown('<div class="hero-loading-bar"></div>', unsafe_allow_html=True)
-        c_skip1, c_skip2, c_skip3 = st.columns([1,1,1])
-        with c_skip2:
-            if st.button("Entrar ahora →", key="hero_skip", use_container_width=True):
-                st.session_state.hero_dismissed = True
-                st.rerun()
-
-    @fragment_decorator(run_every=1)
-    def _hero_autodismiss():
-        if not st.session_state.hero_dismissed and (time.time() - st.session_state.hero_shown_at) > HERO_DURACION_SEG:
-            st.session_state.hero_dismissed = True
-            st.rerun(scope="app")
-    _hero_autodismiss()
 
 # ── DATA ──────────────────────────────────────────────────────────
 @st.cache_data(ttl=300)
