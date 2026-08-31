@@ -70,7 +70,7 @@ PAIRS = {
 }
 
 STYLE_TF = {
-    "Scalping":    {"trend_interval":"1h",  "trend_period":"60d",  "entry_interval":"15m", "entry_period":"10d", "label":"M15/H1"},
+    "Scalping":    {"trend_interval":"15m", "trend_period":"5d",   "entry_interval":"5m",  "entry_period":"2d",  "label":"M5/M15"},
     "Day Trading": {"trend_interval":"4h",  "trend_period":"180d", "entry_interval":"1h",  "entry_period":"60d", "label":"H1/H4"},
     "Swing":       {"trend_interval":"1d",  "trend_period":"2y",   "entry_interval":"4h",  "entry_period":"180d","label":"H4/D1"},
 }
@@ -81,11 +81,47 @@ PIP_SIZE = {"XAU/USD 🥇": 0.1, "EUR/USD 💶": 0.0001}
 SCORE_MIN_ALERTA = 58
 SCORE_MIN_ASIA = 80  # en sesión asiática solo se avisa si es MUY clara
 
+# Umbral de invalidación: si el precio en vivo ya se alejó más de esto
+# respecto a la entrada calculada, la señal se cancela — nunca se manda
+# una entrada "vieja" que el mercado ya rebasó.
+UMBRAL_INVALIDACION_PCT = {"EUR/USD 💶": 0.15, "XAU/USD 🥇": 0.30}
+
 def es_sesion_asiatica(hora_mx):
     return hora_mx in (19,20,21,22,23,0,1,2)
 
+def sesion_actual(hora_mx):
+    """Sesión de mercado según hora de México (UTC-6)."""
+    if hora_mx >= 19 or hora_mx < 2:   return "Asia"
+    if 2 <= hora_mx < 8:               return "Londres"
+    if 8 <= hora_mx < 11:              return "Londres+NY (traslape)"
+    if 11 <= hora_mx < 15:             return "Nueva York"
+    return "Cierre NY"
+
+def momento_favorable(estilo, sesion):
+    """¿Es buen momento para este tipo de operación según la sesión activa?"""
+    if estilo == "Scalping":
+        return sesion in ("Londres+NY (traslape)", "Londres", "Nueva York")
+    if estilo == "Day Trading":
+        return sesion in ("Londres+NY (traslape)", "Nueva York", "Londres", "Cierre NY")
+    return True  # Swing es poco sensible a la sesión del día
+
 def a_pips(dist_precio, par):
     return dist_precio / PIP_SIZE.get(par, 0.0001)
+
+def validar_vigencia_senal(par, senal, precio_vivo):
+    """Compara el precio EN VIVO contra la entrada calculada por la estrategia.
+    Si ya se alejó más del umbral permitido, invalida la señal — nunca se
+    ofrece una entrada que el precio real ya dejó atrás."""
+    if senal['direccion'] == 0 or precio_vivo is None:
+        return senal, False, 0.0
+    umbral = UMBRAL_INVALIDACION_PCT.get(par, 0.2)
+    dist_pct = abs(precio_vivo - senal['precio']) / senal['precio'] * 100
+    if dist_pct > umbral:
+        senal = dict(senal)
+        senal['direccion'] = 0
+        senal['razon'] = [f"⛔ Señal invalidada — el precio ya no está en zona de entrada (se movió {dist_pct:.2f}%, máximo permitido {umbral}%)"]
+        return senal, True, dist_pct
+    return senal, False, dist_pct
 
 def generar_escenarios(par, sen, df_entry, lookback=20):
     precio_ = sen['precio']; atr_ = sen['atr']
@@ -632,7 +668,11 @@ def process_tg_updates(par, senal, score, risk_pct, contract_size):
             else:
                 send_tg(f"📊 Sin posición — {tag}. Score actual: {score['total']}% ({score['categoria']})\nCapital: ${st.session_state.capital:,.2f}")
         elif cmd == 'SEÑAL':
-            send_tg(f"🏛️ *MIMI-AI — {tag}*\nTendencia: {senal['tendencia']}\nSetup: {' · '.join(senal['razon']) if senal['razon'] else 'Sin confluencia aún'}\nScore: {score['total']}% ({score['categoria']})\nPrecio: {pf(precio,par)} | SL: {pf(senal['sl'],par)} | TP: {pf(senal['tp'],par)}")
+            if pred == 0 and senal.get('razon') and 'invalidada' in senal['razon'][0].lower():
+                send_tg(f"🏛️ *MIMI-AI — {tag}*\nPrecio actual: {pf(precio_vivo_actual,par)}\n{senal['razon'][0]}")
+            else:
+                entrada_txt = f"\nEntrada sugerida: {pf(senal['precio'],par)}" if pred != 0 else ""
+                send_tg(f"🏛️ *MIMI-AI — {tag}*\nPrecio actual: {pf(precio_vivo_actual,par)}{entrada_txt}\nTendencia: {senal['tendencia']}\nSetup: {' · '.join(senal['razon']) if senal['razon'] else 'Sin confluencia aún'}\nScore: {score['total']}% ({score['categoria']})\nSesión: {sesion_hoy}\nSL: {pf(senal['sl'],par)} | TP: {pf(senal['tp'],par)}")
         elif cmd == 'BITACORA':
             send_tg(generar_bitacora_2dias())
         elif cmd == 'TEXTO_LIBRE':
@@ -736,6 +776,11 @@ def evaluar_y_notificar_par(par, es_par_activo, stf_usar):
 
     usar_ib_local = pc['usa_ib'] and par == "XAU/USD 🥇" and st.session_state.get('estrategia_xau','') == "Initial Balance Breakout (NY Open)"
     sen = generar_senal(par, df_t, df_e, usar_ib=usar_ib_local)
+
+    tick_local = get_precio_vivo(pc['td_symbol'], pc['yf_symbol'])
+    precio_vivo_local = tick_local['precio'] if tick_local else sen['precio']
+    sen, invalidada_local, _dist_local = validar_vigencia_senal(par, sen, precio_vivo_local)
+
     dxy_r = get_dxy_returns()
     dxy_ok = False
     if dxy_r is not None:
@@ -755,13 +800,16 @@ def evaluar_y_notificar_par(par, es_par_activo, stf_usar):
     abiertos = [t for t in trades if t['estado']=='ABIERTO']
     ahora_ts = _ahora_ts()
     hora_mx = datetime.now(pytz.timezone('America/Mexico_City')).hour
+    sesion_local = sesion_actual(hora_mx)
+    favorable_local = momento_favorable(sv.get('trade_style', 'Day Trading'), sesion_local)
     tag = par.split()[0]
     cambios = False
 
     # 1) ALERTA DE ENTRADA — máximo 1 operación abierta por par
-    #    umbral normal 58%, pero en sesión asiática solo si es MUY clara (>=80%)
+    #    umbral normal 58%, en sesión asiática solo si es MUY clara (>=80%),
+    #    y nunca si la sesión no favorece el estilo de trading configurado
     umbral = SCORE_MIN_ASIA if es_sesion_asiatica(hora_mx) else SCORE_MIN_ALERTA
-    if not abiertos and sen['direccion'] != 0 and sc_['total'] >= umbral:
+    if not abiertos and sen['direccion'] != 0 and sc_['total'] >= umbral and favorable_local:
         last_alert = sv.get('last_entry_alert', {})
         mismo_setup_reciente = last_alert.get('direccion') == sen['direccion'] and (ahora_ts - last_alert.get('ts', 0)) < 3600
         if not mismo_setup_reciente:
@@ -772,12 +820,14 @@ def evaluar_y_notificar_par(par, es_par_activo, stf_usar):
             esc_txt = "\n".join([f"• {e}" for e in escenarios])
             notificar(f"{emoji} *SEÑAL {tag}*\n"
                     f"Dirección: {dir_txt}\n"
-                    f"Precio Entrada: {pf(sen['precio'],par)}\n"
+                    f"Precio actual: {pf(precio_vivo_local,par)}\n"
+                    f"Entrada sugerida: {pf(sen['precio'],par)}\n"
                     f"Stop Loss: {pf(sen['sl'],par)}\n"
                     f"Take Profit 1: {pf(sen['tp'],par)}\n"
                     f"Take Profit 2: {pf(sen['tp2'],par)}\n"
                     f"RR: 1:{rr_:.1f}\n"
                     f"Calidad: {sc_['total']}%\n"
+                    f"Sesión: {sesion_local}\n"
                     f"Razón: {razon_txt}\n\n"
                     f"🔭 *Escenarios:*\n{esc_txt}", icon="🎯")
             log_alerta(sv, 'SEÑAL', dir=dir_txt, precio=sen['precio'], score=sc_['total'])
@@ -1178,6 +1228,11 @@ if df_trend is None or df_entry is None:
 usar_ib = PC['usa_ib'] and st.session_state.get('estrategia_xau','') == "Initial Balance Breakout (NY Open)"
 senal = generar_senal(PAR, df_trend, df_entry, usar_ib=usar_ib)
 
+# ── Verificación de precio en tiempo real — nunca se ofrece una entrada vieja ──
+tick_validacion = get_precio_vivo(PC['td_symbol'], PC['yf_symbol'])
+precio_vivo_actual = tick_validacion['precio'] if tick_validacion else senal['precio']
+senal, senal_invalidada, distancia_invalidacion_pct = validar_vigencia_senal(PAR, senal, precio_vivo_actual)
+
 dxy_ret = get_dxy_returns()
 dxy_corr_ok = False
 if dxy_ret is not None:
@@ -1200,6 +1255,8 @@ score = calcular_score(senal, dxy_corr_ok, noticia_bloqueando, rr_actual)
 precio = senal['precio']; pred = senal['direccion']
 ET = {1:"LONG — ASCENSO", 0:"SIN SETUP CLARO — ESPERA", -1:"SHORT — DESCENSO"}
 mx_tz = pytz.timezone('America/Mexico_City'); ahora = datetime.now(mx_tz); h = ahora.hour
+sesion_hoy = sesion_actual(h)
+favorable_hoy = momento_favorable(st.session_state.trade_style, sesion_hoy)
 
 process_tg_updates(PAR, senal, score, risk_pct, CONTRACT)
 
@@ -1257,7 +1314,12 @@ if st.session_state.page == 'senal':
     with ca:
         st.markdown('<div class="card"><div class="card-title">SEÑAL DEL ORÁCULO</div>', unsafe_allow_html=True)
         st.markdown(f'<div class="{"sig-long" if pred==1 else "sig-short" if pred==-1 else "sig-neu"}">{ET.get(pred)}</div>', unsafe_allow_html=True)
-        st.markdown(f"**Par:** {PAR}  |  **Precio:** {pf(precio,PAR)}  |  **Timeframes:** {STF['label']}")
+        st.markdown(f"**Par:** {PAR}  |  **Timeframes:** {STF['label']}")
+        st.markdown(f"**Precio actual:** {pf(precio_vivo_actual,PAR)}")
+        if senal_invalidada:
+            st.error(f"⛔ Señal invalidada — el precio ya no está en zona de entrada (se movió {distancia_invalidacion_pct:.2f}%, máximo permitido {UMBRAL_INVALIDACION_PCT.get(PAR,0.2)}%)")
+        elif pred != 0:
+            st.markdown(f"**Entrada sugerida:** {pf(senal['precio'],PAR)}  _(a {distancia_invalidacion_pct:.2f}% del precio actual)_")
         if senal['razon']:
             st.markdown("**Justificación:**")
             for rz in senal['razon']: st.markdown(f"- {rz}")
@@ -1269,6 +1331,14 @@ if st.session_state.page == 'senal':
             st.markdown(f"**Take Profit 2 🟢🟢:** {pf(senal['tp2'],PAR)}")
         lot, risg = calc_pos(st.session_state.capital, risk_pct, precio, senal['sl'] if senal['sl']!=precio else precio-senal['atr'], CONTRACT)
         st.markdown(f"**Lotes sugeridos:** {lot}  |  **Riesgo:** ${risg:.2f} ({risk_pct}%)")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        # Sesión de mercado activa
+        st.markdown('<div class="card"><div class="card-title">SESIÓN ACTIVA</div>', unsafe_allow_html=True)
+        fav_color = '#4CAF82' if favorable_hoy else '#C0392B'
+        fav_txt = "✅ Buen momento" if favorable_hoy else "⚠️ No es el mejor momento"
+        st.markdown(f"**Sesión:** {sesion_hoy}  ·  **Hora MX:** {ahora.strftime('%H:%M')}")
+        st.markdown(f"<span style='color:{fav_color};font-weight:700;'>{fav_txt}</span> para operar en modo **{st.session_state.trade_style}** ahorita.", unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
         # Barra de score
@@ -1295,7 +1365,7 @@ if st.session_state.page == 'senal':
                     'tp1_hit':False,'sl_warned':False,'sl_dist':abs(precio-senal['sl']),'last_followup_ts':_ahora_ts(),
                     'lotes':lot2,'riesgo':risg2,'estado':'ABIERTO','fecha':ahora.strftime('%d/%m %H:%M'),
                     'resultado':'PENDIENTE','pnl':0,'score':score['total']})
-                send_tg(f"🟢 *SEÑAL {PAR.split()[0]}*\nDirección: {'Compra' if pred==1 else 'Venta'}\nPrecio de entrada: {pf(precio,PAR)}\nStop Loss: {pf(senal['sl'],PAR)}\nTake Profit 1: {pf(senal['tp'],PAR)}\nTake Profit 2: {pf(senal['tp2'],PAR)}\nRatio RR: 1:{rr_actual:.1f}\nCalidad: {score['total']}%\nRazón: {' · '.join(senal['razon'][:2]) if senal['razon'] else 'Entrada manual'}")
+                send_tg(f"🟢 *SEÑAL {PAR.split()[0]}*\nDirección: {'Compra' if pred==1 else 'Venta'}\nPrecio actual: {pf(precio_vivo_actual,PAR)}\nEntrada sugerida: {pf(precio,PAR)}\nStop Loss: {pf(senal['sl'],PAR)}\nTake Profit 1: {pf(senal['tp'],PAR)}\nTake Profit 2: {pf(senal['tp2'],PAR)}\nRatio RR: 1:{rr_actual:.1f}\nCalidad: {score['total']}%\nRazón: {' · '.join(senal['razon'][:2]) if senal['razon'] else 'Entrada manual'}")
                 gh_save(PAR, {**sv2,'paper_trades':st.session_state.paper_trades}); st.success("Trade registrado ✅"); st.rerun()
             elif ot: st.warning("Ya tienes un trade abierto en este par.")
             else: st.warning("No hay setup claro ahorita.")
