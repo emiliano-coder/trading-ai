@@ -777,9 +777,6 @@ def evaluar_y_notificar_par(par, es_par_activo, stf_usar):
     usar_ib_local = pc['usa_ib'] and par == "XAU/USD 🥇" and st.session_state.get('estrategia_xau','') == "Initial Balance Breakout (NY Open)"
     sen = generar_senal(par, df_t, df_e, usar_ib=usar_ib_local)
 
-    resultado_atraso_local = calcular_atraso_datos(df_e, stf_usar['entry_interval'])
-    atraso_min_local = resultado_atraso_local[0] if resultado_atraso_local else None
-
     tick_local = get_precio_vivo(pc['td_symbol'], pc['yf_symbol'])
     precio_vivo_local = tick_local['precio'] if tick_local else sen['precio']
     sen, invalidada_local, _dist_local = validar_vigencia_senal(par, sen, precio_vivo_local)
@@ -821,7 +818,6 @@ def evaluar_y_notificar_par(par, es_par_activo, stf_usar):
             razon_txt = " · ".join(sen['razon'][:2]) if sen['razon'] else "Setup técnico confirmado"
             escenarios = generar_escenarios(par, sen, df_e)
             esc_txt = "\n".join([f"• {e}" for e in escenarios])
-            atraso_txt_auto = f"\nDatos: última vela hace {atraso_min_local:.1f} min" if atraso_min_local is not None else ""
             notificar(f"{emoji} *SEÑAL {tag}*\n"
                     f"Dirección: {dir_txt}\n"
                     f"Precio actual: {pf(precio_vivo_local,par)}\n"
@@ -831,7 +827,7 @@ def evaluar_y_notificar_par(par, es_par_activo, stf_usar):
                     f"Take Profit 2: {pf(sen['tp2'],par)}\n"
                     f"RR: 1:{rr_:.1f}\n"
                     f"Calidad: {sc_['total']}%\n"
-                    f"Sesión: {sesion_local}{atraso_txt_auto}\n"
+                    f"Sesión: {sesion_local}\n"
                     f"Razón: {razon_txt}\n\n"
                     f"🔭 *Escenarios:*\n{esc_txt}", icon="🎯")
             log_alerta(sv, 'SEÑAL', dir=dir_txt, precio=sen['precio'], score=sc_['total'])
@@ -1211,10 +1207,8 @@ def render_ticker_noticias():
     """, unsafe_allow_html=True)
 
 # ── DATA ──────────────────────────────────────────────────────────
-INTERVALOS_CORTOS = {"1m","5m","15m"}
-MINUTOS_POR_INTERVALO = {"1m":1,"5m":5,"15m":15,"30m":30,"1h":60,"4h":240,"1d":1440}
-
-def _fetch_data(yf_symbol, interval, period):
+@st.cache_data(ttl=300)
+def get_data(yf_symbol, interval, period):
     df = yf.download(yf_symbol, period=period, interval=interval, progress=False)
     df.columns = [c[0] if isinstance(c,tuple) else c for c in df.columns]
     df.dropna(inplace=True)
@@ -1224,47 +1218,12 @@ def _fetch_data(yf_symbol, interval, period):
     df2.dropna(inplace=True)
     return df2 if len(df2) >= 60 else None
 
-@st.cache_data(ttl=60)
-def _get_data_60s(yf_symbol, interval, period):
-    return _fetch_data(yf_symbol, interval, period)
-
-@st.cache_data(ttl=300)
-def _get_data_300s(yf_symbol, interval, period):
-    return _fetch_data(yf_symbol, interval, period)
-
-def get_data(yf_symbol, interval, period):
-    """Cachea 60s en timeframes cortos (scalping) y 300s en el resto —
-    así no analizamos con velas de hasta 5 minutos de atraso en M5/M15."""
-    if interval in INTERVALOS_CORTOS:
-        return _get_data_60s(yf_symbol, interval, period)
-    return _get_data_300s(yf_symbol, interval, period)
-
-def calcular_atraso_datos(df, interval):
-    """Minutos entre la última vela disponible y ahora mismo — para ser
-    honestos sobre qué tan fresco (o no) está el análisis."""
-    if df is None or len(df) == 0:
-        return None
-    try:
-        ultimo_ts = pd.to_datetime(df.index[-1])
-        ultimo_ts = ultimo_ts.tz_localize('UTC') if ultimo_ts.tzinfo is None else ultimo_ts.tz_convert('UTC')
-        atraso_min = (datetime.now(pytz.utc) - ultimo_ts).total_seconds() / 60
-        umbral = MINUTOS_POR_INTERVALO.get(interval, 60) * 2
-        return max(0, atraso_min), umbral
-    except Exception:
-        return None
-
 with st.spinner("🏛️ El Oráculo consulta los astros..."):
     df_trend = get_data(PC['yf_symbol'], STF['trend_interval'], STF['trend_period'])
     df_entry = get_data(PC['yf_symbol'], STF['entry_interval'], STF['entry_period'])
 
 if df_trend is None or df_entry is None:
     st.warning("⚠️ Mercado cerrado o sin datos — intenta más tarde."); st.stop()
-
-resultado_atraso = calcular_atraso_datos(df_entry, STF['entry_interval'])
-if resultado_atraso:
-    atraso_min_datos, atraso_umbral_datos = resultado_atraso
-else:
-    atraso_min_datos, atraso_umbral_datos = None, None
 
 usar_ib = PC['usa_ib'] and st.session_state.get('estrategia_xau','') == "Initial Balance Breakout (NY Open)"
 senal = generar_senal(PAR, df_trend, df_entry, usar_ib=usar_ib)
@@ -1357,12 +1316,6 @@ if st.session_state.page == 'senal':
         st.markdown(f'<div class="{"sig-long" if pred==1 else "sig-short" if pred==-1 else "sig-neu"}">{ET.get(pred)}</div>', unsafe_allow_html=True)
         st.markdown(f"**Par:** {PAR}  |  **Timeframes:** {STF['label']}")
         st.markdown(f"**Precio actual:** {pf(precio_vivo_actual,PAR)}")
-        if atraso_min_datos is not None:
-            atrasado = atraso_min_datos > atraso_umbral_datos
-            color_atraso = '#C0392B' if atrasado else f"{T['primary']}88"
-            icono_atraso = '⚠️' if atrasado else '🕐'
-            st.markdown(f"<span style='color:{color_atraso};font-size:.85em;'>{icono_atraso} Estructura ({STF['entry_interval']}): última vela hace {atraso_min_datos:.1f} min</span>" +
-                        (" — más atrasado de lo normal, cuidado" if atrasado else ""), unsafe_allow_html=True)
         if senal_invalidada:
             st.error(f"⛔ Señal invalidada — el precio ya no está en zona de entrada (se movió {distancia_invalidacion_pct:.2f}%, máximo permitido {UMBRAL_INVALIDACION_PCT.get(PAR,0.2)}%)")
         elif pred != 0:
@@ -1412,8 +1365,7 @@ if st.session_state.page == 'senal':
                     'tp1_hit':False,'sl_warned':False,'sl_dist':abs(precio-senal['sl']),'last_followup_ts':_ahora_ts(),
                     'lotes':lot2,'riesgo':risg2,'estado':'ABIERTO','fecha':ahora.strftime('%d/%m %H:%M'),
                     'resultado':'PENDIENTE','pnl':0,'score':score['total']})
-                atraso_txt = f"\nDatos: última vela hace {atraso_min_datos:.1f} min" if atraso_min_datos is not None else ""
-                send_tg(f"🟢 *SEÑAL {PAR.split()[0]}*\nDirección: {'Compra' if pred==1 else 'Venta'}\nPrecio actual: {pf(precio_vivo_actual,PAR)}\nEntrada sugerida: {pf(precio,PAR)}\nStop Loss: {pf(senal['sl'],PAR)}\nTake Profit 1: {pf(senal['tp'],PAR)}\nTake Profit 2: {pf(senal['tp2'],PAR)}\nRatio RR: 1:{rr_actual:.1f}\nCalidad: {score['total']}%{atraso_txt}\nRazón: {' · '.join(senal['razon'][:2]) if senal['razon'] else 'Entrada manual'}")
+                send_tg(f"🟢 *SEÑAL {PAR.split()[0]}*\nDirección: {'Compra' if pred==1 else 'Venta'}\nPrecio actual: {pf(precio_vivo_actual,PAR)}\nEntrada sugerida: {pf(precio,PAR)}\nStop Loss: {pf(senal['sl'],PAR)}\nTake Profit 1: {pf(senal['tp'],PAR)}\nTake Profit 2: {pf(senal['tp2'],PAR)}\nRatio RR: 1:{rr_actual:.1f}\nCalidad: {score['total']}%\nRazón: {' · '.join(senal['razon'][:2]) if senal['razon'] else 'Entrada manual'}")
                 gh_save(PAR, {**sv2,'paper_trades':st.session_state.paper_trades}); st.success("Trade registrado ✅"); st.rerun()
             elif ot: st.warning("Ya tienes un trade abierto en este par.")
             else: st.warning("No hay setup claro ahorita.")
