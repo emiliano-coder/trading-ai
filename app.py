@@ -14,6 +14,7 @@ import json
 import base64
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from core.market_structure import analyze_market_structure
 warnings.filterwarnings('ignore')
 
 st.set_page_config(page_title="MIMI-AI", page_icon="🏛️", layout="wide")
@@ -1017,7 +1018,7 @@ def monitor_automatico(par_seleccionado, stf_activo):
 # principal (barra superior con categorías). La sidebar es solo CONFIG.
 NAV_GROUPS = [
     ("Principal",    [("senal","Señal"), ("monitor","Monitor")]),
-    ("Análisis",     [("estructura","Estructura"), ("multitf","Multi-TF"), ("grafica","Gráfica")]),
+    ("Análisis",     [("estructura","Estructura"), ("market_structure","Market Structure"), ("multitf","Multi-TF"), ("grafica","Gráfica")]),
     ("Operar",       [("paper","Paper"), ("historial","Historial")]),
     ("Herramientas", [("chat","Chat"), ("alertas","Alertas"), ("backtest","Backtest")]),
 ]
@@ -1430,6 +1431,88 @@ if st.session_state.page == 'estructura':
         st.markdown(f"SL: {pf(senal['sl'],PAR)}  |  TP: {pf(senal['tp'],PAR)}")
         st.markdown(f"R:R actual: 1:{rr_actual:.2f} (mínimo aceptable 1:2)")
         st.markdown(f"Riesgo configurado: {risk_pct}% del capital por operación")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+# ── PÁGINA DE PRUEBA — Market Structure (core/market_structure.py) ──
+# Aislado: no toca señal, score, Telegram, Gemini, ML, ni paper trading.
+if st.session_state.page == 'market_structure':
+    st.markdown(f'<div style="font-family:Cinzel,serif;color:{T["primary"]};font-size:.85em;letter-spacing:3px;margin-bottom:12px;">MARKET STRUCTURE — módulo de prueba ({PAR})</div>', unsafe_allow_html=True)
+    st.caption("Motor nuevo e independiente (`core/market_structure.py`). Esta página solo lo prueba — no afecta la Señal, el Score, Telegram ni nada más de la app.")
+
+    colcfg1, colcfg2, colcfg3 = st.columns(3)
+    with colcfg1:
+        ms_swing_order = st.slider("Sensibilidad del swing (swing_order)", 2, 15, 5,
+                                    help="Más alto = swings más significativos y menos frecuentes. Más bajo = más swings, más ruido.")
+    with colcfg2:
+        ms_break_using = st.selectbox("Ruptura probada con", ["close", "wick"], index=0,
+                                       help="'close' es más conservador (evita mechas falsas). 'wick' usa high/low, detecta antes.")
+    with colcfg3:
+        ms_usar_demo = st.checkbox("Usar datos simulados de prueba", value=False,
+                                    help="Prueba el motor con OHLCV sintético en vez de los datos reales del par activo.")
+
+    if ms_usar_demo:
+        from core.market_structure import _generar_datos_simulados
+        df_ms_input = _generar_datos_simulados(n=200)
+        st.caption("Usando datos OHLCV simulados (no son precios reales).")
+    else:
+        df_ms_input = df_entry
+
+    try:
+        df_ms_out, ms_summary = analyze_market_structure(df_ms_input, swing_order=ms_swing_order, break_using=ms_break_using)
+        ms_error = None
+    except Exception as e:
+        df_ms_out, ms_summary, ms_error = None, None, str(e)
+
+    if ms_error:
+        st.error(f"⚠️ Error corriendo el motor de Market Structure: {ms_error}")
+    else:
+        trend_color = '#4CAF82' if ms_summary['trend']=='bullish' else '#C0392B' if ms_summary['trend']=='bearish' else T['primary']
+        c_ms1, c_ms2 = st.columns(2)
+        with c_ms1:
+            st.markdown('<div class="card"><div class="card-title">TENDENCIA ESTRUCTURAL</div>', unsafe_allow_html=True)
+            st.markdown(f'<span style="color:{trend_color};font-family:Cinzel,serif;font-size:1.3em;letter-spacing:2px;">{ms_summary["trend"].upper()}</span>', unsafe_allow_html=True)
+            st.markdown(f"Última estructura: **{ms_summary['last_structure'] or '—'}**")
+            st.markdown('</div>', unsafe_allow_html=True)
+
+            st.markdown('<div class="card"><div class="card-title">ÚLTIMOS SWINGS</div>', unsafe_allow_html=True)
+            sh = ms_summary['last_swing_high']
+            sl_sw = ms_summary['last_swing_low']
+            if sh:
+                st.markdown(f"**Swing High:** {sh['price']:.5f} — {sh['label']} (vela #{sh['index']}, confirmado en #{sh['confirmed_at']})")
+            else:
+                st.markdown("**Swing High:** — sin confirmar aún")
+            if sl_sw:
+                st.markdown(f"**Swing Low:** {sl_sw['price']:.5f} — {sl_sw['label']} (vela #{sl_sw['index']}, confirmado en #{sl_sw['confirmed_at']})")
+            else:
+                st.markdown("**Swing Low:** — sin confirmar aún")
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        with c_ms2:
+            st.markdown('<div class="card"><div class="card-title">ÚLTIMO BOS</div>', unsafe_allow_html=True)
+            bos = ms_summary['bos']
+            if bos:
+                bos_color = '#4CAF82' if bos['direction']=='bullish' else '#C0392B'
+                st.markdown(f"<span style='color:{bos_color};font-weight:700;'>{bos['direction'].upper()}</span>", unsafe_allow_html=True)
+                st.markdown(f"Precio de ruptura: {bos['price']:.5f}  ·  Nivel roto: {bos['level']:.5f}")
+                st.markdown(f"Desplazamiento: {bos['displacement']:.5f} ({bos['displacement_pct']:.2f}%)")
+            else:
+                st.markdown("Sin BOS detectado todavía en esta ventana de datos.")
+            st.markdown('</div>', unsafe_allow_html=True)
+
+            st.markdown('<div class="card"><div class="card-title">ÚLTIMO CHoCH</div>', unsafe_allow_html=True)
+            choch = ms_summary['choch']
+            if choch:
+                choch_color = '#4CAF82' if choch['direction']=='bullish' else '#C0392B'
+                st.markdown(f"<span style='color:{choch_color};font-weight:700;'>{choch['direction'].upper()}</span>", unsafe_allow_html=True)
+                st.markdown(f"Precio de ruptura: {choch['price']:.5f}  ·  Nivel roto: {choch['level']:.5f}")
+                st.markdown(f"Desplazamiento: {choch['displacement']:.5f} ({choch['displacement_pct']:.2f}%)")
+            else:
+                st.markdown("Sin CHoCH detectado todavía en esta ventana de datos.")
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        st.markdown('<div class="card"><div class="card-title">ÚLTIMAS VELAS — COLUMNAS DE ESTRUCTURA</div>', unsafe_allow_html=True)
+        cols_ms = ["close","swing_high","swing_low","structure_label","bos_bullish","bos_bearish","choch_bullish","choch_bearish","structure_trend","displacement"]
+        st.dataframe(df_ms_out.tail(15)[cols_ms], use_container_width=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
 # ── TAB 3: MULTI-TF (confluencia genérica, independiente de la estrategia principal) ──
