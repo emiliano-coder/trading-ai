@@ -15,6 +15,7 @@ import base64
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from core.market_structure import analyze_market_structure
+from core.liquidity import analyze_liquidity
 warnings.filterwarnings('ignore')
 
 st.set_page_config(page_title="MIMI-AI", page_icon="🏛️", layout="wide")
@@ -1018,7 +1019,7 @@ def monitor_automatico(par_seleccionado, stf_activo):
 # principal (barra superior con categorías). La sidebar es solo CONFIG.
 NAV_GROUPS = [
     ("Principal",    [("senal","Señal"), ("monitor","Monitor")]),
-    ("Análisis",     [("estructura","Estructura"), ("market_structure","Market Structure"), ("multitf","Multi-TF"), ("grafica","Gráfica")]),
+    ("Análisis",     [("estructura","Estructura"), ("market_structure","Market Structure"), ("liquidity","Liquidity"), ("multitf","Multi-TF"), ("grafica","Gráfica")]),
     ("Operar",       [("paper","Paper"), ("historial","Historial")]),
     ("Herramientas", [("chat","Chat"), ("alertas","Alertas"), ("backtest","Backtest")]),
 ]
@@ -1433,11 +1434,12 @@ if st.session_state.page == 'estructura':
         st.markdown(f"Riesgo configurado: {risk_pct}% del capital por operación")
         st.markdown('</div>', unsafe_allow_html=True)
 
-# ── PÁGINA DE PRUEBA — Market Structure (core/market_structure.py) ──
-# Aislado: no toca señal, score, Telegram, Gemini, ML, ni paper trading.
+# ── PÁGINA — 📊 Market Structure (core/market_structure.py) ─────────
+# Sistema paralelo, solo informativo: no toca señal, score, Telegram,
+# Gemini, ML, Wyckoff, paper trading ni detectar_estructura_rota().
 if st.session_state.page == 'market_structure':
-    st.markdown(f'<div style="font-family:Cinzel,serif;color:{T["primary"]};font-size:.85em;letter-spacing:3px;margin-bottom:12px;">MARKET STRUCTURE — módulo de prueba ({PAR})</div>', unsafe_allow_html=True)
-    st.caption("Motor nuevo e independiente (`core/market_structure.py`). Esta página solo lo prueba — no afecta la Señal, el Score, Telegram ni nada más de la app.")
+    st.markdown(f'<div style="font-family:Cinzel,serif;color:{T["primary"]};font-size:1.1em;letter-spacing:2px;margin-bottom:2px;">📊 Market Structure</div>', unsafe_allow_html=True)
+    st.caption(f"Motor nuevo e independiente (`core/market_structure.py`) · {PAR} · Es solo informativo — la estrategia y la señal actual siguen usando `detectar_estructura_rota()` sin cambios.")
 
     colcfg1, colcfg2, colcfg3 = st.columns(3)
     with colcfg1:
@@ -1457,21 +1459,29 @@ if st.session_state.page == 'market_structure':
     else:
         df_ms_input = df_entry
 
-    try:
-        df_ms_out, ms_summary = analyze_market_structure(df_ms_input, swing_order=ms_swing_order, break_using=ms_break_using)
-        ms_error = None
-    except Exception as e:
-        df_ms_out, ms_summary, ms_error = None, None, str(e)
+    # ── Casos límite: nunca debe tumbar la app ──────────────────────
+    ms_error = None
+    df_ms_out, ms_summary = None, None
+    if df_ms_input is None or len(df_ms_input) == 0:
+        ms_error = "No hay datos OHLCV disponibles todavía para este par (DataFrame vacío)."
+    elif len(df_ms_input) < (ms_swing_order * 2 + 1):
+        st.warning(f"⚠️ Pocas velas ({len(df_ms_input)}) para swing_order={ms_swing_order} — probablemente no se detecten swings todavía. Baja la sensibilidad o espera más datos.")
+
+    if ms_error is None:
+        try:
+            df_ms_out, ms_summary = analyze_market_structure(df_ms_input, swing_order=ms_swing_order, break_using=ms_break_using)
+        except Exception as e:
+            ms_error = f"{type(e).__name__}: {e}"
 
     if ms_error:
-        st.error(f"⚠️ Error corriendo el motor de Market Structure: {ms_error}")
+        st.error(f"⚠️ El motor de Market Structure no pudo correr — la app y la estrategia actual siguen funcionando normal. Detalle: {ms_error}")
     else:
         trend_color = '#4CAF82' if ms_summary['trend']=='bullish' else '#C0392B' if ms_summary['trend']=='bearish' else T['primary']
         c_ms1, c_ms2 = st.columns(2)
         with c_ms1:
             st.markdown('<div class="card"><div class="card-title">TENDENCIA ESTRUCTURAL</div>', unsafe_allow_html=True)
             st.markdown(f'<span style="color:{trend_color};font-family:Cinzel,serif;font-size:1.3em;letter-spacing:2px;">{ms_summary["trend"].upper()}</span>', unsafe_allow_html=True)
-            st.markdown(f"Última estructura: **{ms_summary['last_structure'] or '—'}**")
+            st.markdown(f"Última estructura: **{ms_summary['last_structure'] or 'No detectado'}**")
             st.markdown('</div>', unsafe_allow_html=True)
 
             st.markdown('<div class="card"><div class="card-title">ÚLTIMOS SWINGS</div>', unsafe_allow_html=True)
@@ -1480,11 +1490,11 @@ if st.session_state.page == 'market_structure':
             if sh:
                 st.markdown(f"**Swing High:** {sh['price']:.5f} — {sh['label']} (vela #{sh['index']}, confirmado en #{sh['confirmed_at']})")
             else:
-                st.markdown("**Swing High:** — sin confirmar aún")
+                st.markdown("**Swing High:** No detectado")
             if sl_sw:
                 st.markdown(f"**Swing Low:** {sl_sw['price']:.5f} — {sl_sw['label']} (vela #{sl_sw['index']}, confirmado en #{sl_sw['confirmed_at']})")
             else:
-                st.markdown("**Swing Low:** — sin confirmar aún")
+                st.markdown("**Swing Low:** No detectado")
             st.markdown('</div>', unsafe_allow_html=True)
 
         with c_ms2:
@@ -1496,7 +1506,7 @@ if st.session_state.page == 'market_structure':
                 st.markdown(f"Precio de ruptura: {bos['price']:.5f}  ·  Nivel roto: {bos['level']:.5f}")
                 st.markdown(f"Desplazamiento: {bos['displacement']:.5f} ({bos['displacement_pct']:.2f}%)")
             else:
-                st.markdown("Sin BOS detectado todavía en esta ventana de datos.")
+                st.markdown("No detectado todavía en esta ventana de datos.")
             st.markdown('</div>', unsafe_allow_html=True)
 
             st.markdown('<div class="card"><div class="card-title">ÚLTIMO CHoCH</div>', unsafe_allow_html=True)
@@ -1507,13 +1517,159 @@ if st.session_state.page == 'market_structure':
                 st.markdown(f"Precio de ruptura: {choch['price']:.5f}  ·  Nivel roto: {choch['level']:.5f}")
                 st.markdown(f"Desplazamiento: {choch['displacement']:.5f} ({choch['displacement_pct']:.2f}%)")
             else:
-                st.markdown("Sin CHoCH detectado todavía en esta ventana de datos.")
+                st.markdown("No detectado todavía en esta ventana de datos.")
             st.markdown('</div>', unsafe_allow_html=True)
+
+        # ── Overlay opcional sobre gráfica — autocontenido, no toca el tab "Gráfica" ──
+        with st.expander("📈 Ver en gráfica (swings + BOS/CHoCH)", expanded=False):
+            try:
+                dfg = df_ms_out.tail(150).copy()
+                fig_ms = go.Figure()
+                fig_ms.add_trace(go.Candlestick(
+                    x=dfg.index, open=dfg['open'], high=dfg['high'], low=dfg['low'], close=dfg['close'],
+                    increasing_line_color='#4CAF82', decreasing_line_color='#C0392B', name=PAR))
+                sh_pts = dfg[dfg['swing_high']]
+                sl_pts = dfg[dfg['swing_low']]
+                fig_ms.add_trace(go.Scatter(x=sh_pts.index, y=sh_pts['high'], mode='markers',
+                    marker=dict(symbol='triangle-down', size=9, color='#C0392B'), name='Swing High'))
+                fig_ms.add_trace(go.Scatter(x=sl_pts.index, y=sl_pts['low'], mode='markers',
+                    marker=dict(symbol='triangle-up', size=9, color='#4CAF82'), name='Swing Low'))
+                bos_b = dfg[dfg['bos_bullish']]; bos_s = dfg[dfg['bos_bearish']]
+                choch_b = dfg[dfg['choch_bullish']]; choch_s = dfg[dfg['choch_bearish']]
+                fig_ms.add_trace(go.Scatter(x=bos_b.index, y=bos_b['close'], mode='markers',
+                    marker=dict(symbol='star', size=12, color='#4CAF82'), name='BOS alcista'))
+                fig_ms.add_trace(go.Scatter(x=bos_s.index, y=bos_s['close'], mode='markers',
+                    marker=dict(symbol='star', size=12, color='#C0392B'), name='BOS bajista'))
+                fig_ms.add_trace(go.Scatter(x=choch_b.index, y=choch_b['close'], mode='markers',
+                    marker=dict(symbol='diamond', size=12, color='#8FB08C'), name='CHoCH alcista'))
+                fig_ms.add_trace(go.Scatter(x=choch_s.index, y=choch_s['close'], mode='markers',
+                    marker=dict(symbol='diamond', size=12, color='#B33A3A'), name='CHoCH bajista'))
+                fig_ms.update_layout(paper_bgcolor='#000', plot_bgcolor='#050300',
+                    font=dict(color='#888', family='Philosopher,serif'),
+                    xaxis_rangeslider_visible=False, height=440, margin=dict(l=0,r=0,t=20,b=0),
+                    legend=dict(bgcolor='#000', bordercolor='#222', orientation='h'))
+                st.plotly_chart(fig_ms, use_container_width=True)
+            except Exception as e:
+                st.info(f"No se pudo dibujar el overlay (el panel de arriba sigue siendo válido). Detalle: {e}")
 
         st.markdown('<div class="card"><div class="card-title">ÚLTIMAS VELAS — COLUMNAS DE ESTRUCTURA</div>', unsafe_allow_html=True)
         cols_ms = ["close","swing_high","swing_low","structure_label","bos_bullish","bos_bearish","choch_bullish","choch_bearish","structure_trend","displacement"]
         st.dataframe(df_ms_out.tail(15)[cols_ms], use_container_width=True)
         st.markdown('</div>', unsafe_allow_html=True)
+
+# ── PÁGINA — 💧 Liquidity (core/liquidity.py) ────────────────────────
+# Sistema paralelo, solo informativo: reutiliza los swings de
+# market_structure.py. NO cambia señal, score, Telegram, Gemini, ML,
+# Wyckoff, paper trading ni detectar_estructura_rota().
+if st.session_state.page == 'liquidity':
+    st.markdown(f'<div style="font-family:Cinzel,serif;color:{T["primary"]};font-size:1.1em;letter-spacing:2px;margin-bottom:2px;">💧 Liquidity</div>', unsafe_allow_html=True)
+    st.caption(f"Motor nuevo e independiente (`core/liquidity.py`) · {PAR} · Es solo informativo — todavía no cambia la señal ni el score de MIMI.")
+
+    colcfg1, colcfg2, colcfg3 = st.columns(3)
+    with colcfg1:
+        lq_swing_order = st.slider("Sensibilidad del swing (swing_order)", 2, 15, 5, key="lq_swing_order")
+    with colcfg2:
+        lq_break_using = st.selectbox("Ruptura probada con", ["close", "wick"], index=0, key="lq_break_using")
+    with colcfg3:
+        lq_tolerancia = st.number_input("Tolerancia EQH/EQL (%)", min_value=0.01, max_value=2.0, value=0.05, step=0.01, key="lq_tolerancia",
+                                         help="Qué tan cerca deben estar dos swings en precio para considerarse 'iguales'. Es un %, no un valor fijo — así sirve igual para XAU/USD que para EUR/USD.")
+
+    lq_usar_demo = st.checkbox("Usar datos simulados de prueba", value=False, key="lq_usar_demo")
+    if lq_usar_demo:
+        from core.liquidity import _generar_datos_liquidez
+        df_lq_input = _generar_datos_liquidez()
+        st.caption("Usando datos OHLCV simulados (no son precios reales) — diseñados para mostrar EQH/EQL y sweeps.")
+    else:
+        df_lq_input = df_entry
+
+    lq_error = None
+    df_lq_out, lq_summary = None, None
+    if df_lq_input is None or len(df_lq_input) == 0:
+        lq_error = "No hay datos OHLCV disponibles todavía para este par (DataFrame vacío)."
+    elif len(df_lq_input) < (lq_swing_order * 2 + 1):
+        st.warning(f"⚠️ Pocas velas ({len(df_lq_input)}) para swing_order={lq_swing_order} — probablemente no se detecten swings/EQH/EQL todavía.")
+
+    if lq_error is None:
+        try:
+            df_lq_out, lq_summary = analyze_liquidity(df_lq_input, swing_order=lq_swing_order, break_using=lq_break_using, equal_tolerance_pct=lq_tolerancia)
+        except Exception as e:
+            lq_error = f"{type(e).__name__}: {e}"
+
+    if lq_error:
+        st.error(f"⚠️ El motor de Liquidity no pudo correr — la app y la estrategia actual siguen funcionando normal. Detalle: {lq_error}")
+    else:
+        n_eqh_activos = len(lq_summary['active_eqh'])
+        n_eql_activos = len(lq_summary['active_eql'])
+        c_lq1, c_lq2 = st.columns(2)
+        with c_lq1:
+            st.markdown('<div class="card"><div class="card-title">POOLS DE LIQUIDEZ</div>', unsafe_allow_html=True)
+            st.markdown(f"**EQH activos:** {n_eqh_activos}")
+            st.markdown(f"**EQL activos:** {n_eql_activos}")
+            liq_arriba = lq_summary['nearest_buy_side_liquidity']
+            liq_abajo = lq_summary['nearest_sell_side_liquidity']
+            st.markdown(f"**Liquidez por encima:** {pf(liq_arriba,PAR) if liq_arriba is not None else 'No detectado'}")
+            st.markdown(f"**Liquidez por debajo:** {pf(liq_abajo,PAR) if liq_abajo is not None else 'No detectado'}")
+            st.markdown(f"**Tolerancia usada:** {lq_tolerancia}%")
+            st.markdown('</div>', unsafe_allow_html=True)
+
+            if lq_summary['active_eqh'] or lq_summary['active_eql']:
+                st.markdown('<div class="card"><div class="card-title">DETALLE DE ZONAS ACTIVAS</div>', unsafe_allow_html=True)
+                for z in lq_summary['active_eqh']:
+                    st.markdown(f"🔴 EQH {pf(z['level'],PAR)} — {z['touches']} toques")
+                for z in lq_summary['active_eql']:
+                    st.markdown(f"🟢 EQL {pf(z['level'],PAR)} — {z['touches']} toques")
+                st.markdown('</div>', unsafe_allow_html=True)
+
+        with c_lq2:
+            st.markdown('<div class="card"><div class="card-title">ÚLTIMO SWEEP</div>', unsafe_allow_html=True)
+            last_bull = lq_summary['last_bullish_sweep']
+            last_bear = lq_summary['last_bearish_sweep']
+            ultimo = None
+            if last_bull and last_bear:
+                ultimo = last_bull if last_bull['index'] >= last_bear['index'] else last_bear
+            else:
+                ultimo = last_bull or last_bear
+            if ultimo:
+                emoji_sweep = "🟢" if ultimo['direction']=='bullish' else "🔴"
+                st.markdown(f"{emoji_sweep} **{ultimo['direction'].capitalize()} liquidity sweep**")
+                st.markdown(f"**Nivel tomado:** {pf(ultimo['level'],PAR)}")
+                st.markdown(f"Zona: {ultimo['zone_kind']} ({ultimo['touches']} toques) · vela #{ultimo['index']}")
+            else:
+                st.markdown("No detectado todavía en esta ventana de datos.")
+            st.markdown('</div>', unsafe_allow_html=True)
+
+            st.markdown('<div class="card"><div class="card-title">RESUMEN</div>', unsafe_allow_html=True)
+            st.markdown(f"**¿Liquidez tomada en esta ventana?** {'Sí' if lq_summary['liquidity_taken'] else 'No'}")
+            st.markdown(f"Sweeps alcistas totales: {len(lq_summary['bullish_sweeps'])}")
+            st.markdown(f"Sweeps bajistas totales: {len(lq_summary['bearish_sweeps'])}")
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        # ── Overlay opcional sobre gráfica — autocontenido ──────────
+        with st.expander("📈 Ver en gráfica (EQH/EQL + sweeps)", expanded=False):
+            try:
+                dfg = df_lq_out.tail(150).copy()
+                fig_lq = go.Figure()
+                fig_lq.add_trace(go.Candlestick(
+                    x=dfg.index, open=dfg['open'], high=dfg['high'], low=dfg['low'], close=dfg['close'],
+                    increasing_line_color='#4CAF82', decreasing_line_color='#C0392B', name=PAR))
+                for z in lq_summary['active_eqh']:
+                    fig_lq.add_hline(y=z['level'], line_color='rgba(192,57,43,0.55)', line_dash='dot',
+                                      annotation_text=f"EQH {z['level']:.5f}", annotation_font_color='#C0392B')
+                for z in lq_summary['active_eql']:
+                    fig_lq.add_hline(y=z['level'], line_color='rgba(76,175,130,0.55)', line_dash='dot',
+                                      annotation_text=f"EQL {z['level']:.5f}", annotation_font_color='#4CAF82')
+                bull_pts = dfg[dfg['bullish_sweep']]; bear_pts = dfg[dfg['bearish_sweep']]
+                fig_lq.add_trace(go.Scatter(x=bull_pts.index, y=bull_pts['low'], mode='markers',
+                    marker=dict(symbol='triangle-up', size=13, color='#4CAF82'), name='Bullish sweep'))
+                fig_lq.add_trace(go.Scatter(x=bear_pts.index, y=bear_pts['high'], mode='markers',
+                    marker=dict(symbol='triangle-down', size=13, color='#C0392B'), name='Bearish sweep'))
+                fig_lq.update_layout(paper_bgcolor='#000', plot_bgcolor='#050300',
+                    font=dict(color='#888', family='Philosopher,serif'),
+                    xaxis_rangeslider_visible=False, height=440, margin=dict(l=0,r=0,t=20,b=0),
+                    legend=dict(bgcolor='#000', bordercolor='#222', orientation='h'))
+                st.plotly_chart(fig_lq, use_container_width=True)
+            except Exception as e:
+                st.info(f"No se pudo dibujar el overlay (el panel de arriba sigue siendo válido). Detalle: {e}")
 
 # ── TAB 3: MULTI-TF (confluencia genérica, independiente de la estrategia principal) ──
 if st.session_state.page == 'multitf':
