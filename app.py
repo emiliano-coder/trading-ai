@@ -16,6 +16,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from core.market_structure import analyze_market_structure
 from core.liquidity import analyze_liquidity
+from core.fvg import analyze_fvg
 warnings.filterwarnings('ignore')
 
 st.set_page_config(page_title="MIMI-AI", page_icon="🏛️", layout="wide")
@@ -1019,7 +1020,7 @@ def monitor_automatico(par_seleccionado, stf_activo):
 # principal (barra superior con categorías). La sidebar es solo CONFIG.
 NAV_GROUPS = [
     ("Principal",    [("senal","Señal"), ("monitor","Monitor")]),
-    ("Análisis",     [("estructura","Estructura"), ("market_structure","Market Structure"), ("liquidity","Liquidity"), ("multitf","Multi-TF"), ("grafica","Gráfica")]),
+    ("Análisis",     [("estructura","Estructura"), ("market_structure","Market Structure"), ("liquidity","Liquidity"), ("fvg","FVG"), ("multitf","Multi-TF"), ("grafica","Gráfica")]),
     ("Operar",       [("paper","Paper"), ("historial","Historial")]),
     ("Herramientas", [("chat","Chat"), ("alertas","Alertas"), ("backtest","Backtest")]),
 ]
@@ -1668,6 +1669,112 @@ if st.session_state.page == 'liquidity':
                     xaxis_rangeslider_visible=False, height=440, margin=dict(l=0,r=0,t=20,b=0),
                     legend=dict(bgcolor='#000', bordercolor='#222', orientation='h'))
                 st.plotly_chart(fig_lq, use_container_width=True)
+            except Exception as e:
+                st.info(f"No se pudo dibujar el overlay (el panel de arriba sigue siendo válido). Detalle: {e}")
+
+# ── PÁGINA — 📐 FVG (core/fvg.py) ────────────────────────────────────
+# Sistema paralelo, solo informativo. NO cambia señal, score, Telegram,
+# Gemini, ML, Wyckoff, paper trading, Market Structure ni Liquidity.
+if st.session_state.page == 'fvg':
+    st.markdown(f'<div style="font-family:Cinzel,serif;color:{T["primary"]};font-size:1.1em;letter-spacing:2px;margin-bottom:2px;">📐 FVG</div>', unsafe_allow_html=True)
+    st.caption(f"Motor nuevo e independiente (`core/fvg.py`) · {PAR} · Es solo informativo — todavía no cambia la señal ni el score de MIMI.")
+
+    colcfg1, colcfg2 = st.columns(2)
+    with colcfg1:
+        fvg_criterio = st.selectbox("Criterio de mitigación", ["touch", "50%", "full"], index=1, key="fvg_criterio",
+                                     help="'touch': mitigado con cualquier toque. '50%': al rellenar la mitad. 'full': solo al rellenar el gap completo.")
+    with colcfg2:
+        fvg_min_pct = st.number_input("Tamaño mínimo del gap (%)", min_value=0.0, max_value=2.0, value=0.0, step=0.01, key="fvg_min_pct",
+                                       help="0 = detecta cualquier gap genuino, sin filtro de tamaño.")
+
+    fvg_usar_demo = st.checkbox("Usar datos simulados de prueba", value=False, key="fvg_usar_demo")
+    if fvg_usar_demo:
+        from core.fvg import _generar_datos_fvg_bullish
+        df_fvg_input = _generar_datos_fvg_bullish()
+        st.caption("Usando datos OHLC simulados (no son precios reales) — diseñados para mostrar un FVG de principio a fin.")
+    else:
+        df_fvg_input = df_entry
+
+    fvg_error = None
+    df_fvg_out, fvg_summary = None, None
+    if df_fvg_input is None or len(df_fvg_input) == 0:
+        fvg_error = "No hay datos OHLC disponibles todavía para este par (DataFrame vacío)."
+    elif len(df_fvg_input) < 3:
+        st.warning("⚠️ Se necesitan al menos 3 velas para que pueda existir un FVG.")
+
+    if fvg_error is None:
+        try:
+            df_fvg_out, fvg_summary = analyze_fvg(df_fvg_input, mitigation_criterion=fvg_criterio, min_gap_pct=fvg_min_pct)
+        except Exception as e:
+            fvg_error = f"{type(e).__name__}: {e}"
+
+    if fvg_error:
+        st.error(f"⚠️ El motor de FVG no pudo correr — la app y la estrategia actual siguen funcionando normal. Detalle: {fvg_error}")
+    else:
+        c_fvg1, c_fvg2 = st.columns(2)
+        with c_fvg1:
+            st.markdown('<div class="card"><div class="card-title">FVG ALCISTAS ACTIVOS</div>', unsafe_allow_html=True)
+            activos_bull = fvg_summary['active_bullish_fvg']
+            if activos_bull:
+                for z in activos_bull:
+                    st.markdown(f"🟢 {pf(z['bottom'],PAR)} — {pf(z['top'],PAR)}  ·  {z['status']} ({z['max_fill_pct']}% relleno)")
+            else:
+                st.markdown("No detectado")
+            st.markdown('</div>', unsafe_allow_html=True)
+
+            st.markdown('<div class="card"><div class="card-title">ÚLTIMO FVG ALCISTA</div>', unsafe_allow_html=True)
+            lb = fvg_summary['last_bullish_fvg']
+            if lb:
+                st.markdown(f"**Rango:** {pf(lb['bottom'],PAR)} — {pf(lb['top'],PAR)}  ·  Tamaño: {pf(lb['size'],PAR)}")
+                st.markdown(f"**Estado:** {lb['status']}  ·  vela #{lb['created_at']}")
+            else:
+                st.markdown("No detectado")
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        with c_fvg2:
+            st.markdown('<div class="card"><div class="card-title">FVG BAJISTAS ACTIVOS</div>', unsafe_allow_html=True)
+            activos_bear = fvg_summary['active_bearish_fvg']
+            if activos_bear:
+                for z in activos_bear:
+                    st.markdown(f"🔴 {pf(z['bottom'],PAR)} — {pf(z['top'],PAR)}  ·  {z['status']} ({z['max_fill_pct']}% relleno)")
+            else:
+                st.markdown("No detectado")
+            st.markdown('</div>', unsafe_allow_html=True)
+
+            st.markdown('<div class="card"><div class="card-title">ÚLTIMO FVG BAJISTA</div>', unsafe_allow_html=True)
+            lbear = fvg_summary['last_bearish_fvg']
+            if lbear:
+                st.markdown(f"**Rango:** {pf(lbear['bottom'],PAR)} — {pf(lbear['top'],PAR)}  ·  Tamaño: {pf(lbear['size'],PAR)}")
+                st.markdown(f"**Estado:** {lbear['status']}  ·  vela #{lbear['created_at']}")
+            else:
+                st.markdown("No detectado")
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        st.markdown('<div class="card"><div class="card-title">ÚLTIMA MITIGACIÓN / INVALIDACIÓN</div>', unsafe_allow_html=True)
+        lm = fvg_summary['last_mitigated_fvg']
+        li = fvg_summary['last_invalidated_fvg']
+        st.markdown(f"**Último mitigado:** " + (f"{lm['kind']} {pf(lm['bottom'],PAR)}—{pf(lm['top'],PAR)} en vela #{lm['mitigated_at']}" if lm else "No detectado"))
+        st.markdown(f"**Último invalidado:** " + (f"{li['kind']} {pf(li['bottom'],PAR)}—{pf(li['top'],PAR)} en vela #{li['invalidated_at']}" if li else "No detectado"))
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        # ── Overlay opcional sobre gráfica — autocontenido ──────────
+        with st.expander("📈 Ver en gráfica (zonas FVG)", expanded=False):
+            try:
+                dfg = df_fvg_out.tail(150).copy()
+                fig_fvg = go.Figure()
+                fig_fvg.add_trace(go.Candlestick(
+                    x=dfg.index, open=dfg['open'], high=dfg['high'], low=dfg['low'], close=dfg['close'],
+                    increasing_line_color='#4CAF82', decreasing_line_color='#C0392B', name=PAR))
+                for z in activos_bull:
+                    fig_fvg.add_hrect(y0=z['bottom'], y1=z['top'], fillcolor='rgba(76,175,130,0.15)', line_width=0)
+                for z in activos_bear:
+                    fig_fvg.add_hrect(y0=z['bottom'], y1=z['top'], fillcolor='rgba(192,57,43,0.15)', line_width=0)
+                fig_fvg.update_layout(paper_bgcolor='#000', plot_bgcolor='#050300',
+                    font=dict(color='#888', family='Philosopher,serif'),
+                    xaxis_rangeslider_visible=False, height=440, margin=dict(l=0,r=0,t=20,b=0),
+                    legend=dict(bgcolor='#000', bordercolor='#222', orientation='h'))
+                st.plotly_chart(fig_fvg, use_container_width=True)
+                st.caption("Zonas verdes = FVG alcistas activos · Zonas rojas = FVG bajistas activos")
             except Exception as e:
                 st.info(f"No se pudo dibujar el overlay (el panel de arriba sigue siendo válido). Detalle: {e}")
 
