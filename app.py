@@ -17,6 +17,7 @@ from plotly.subplots import make_subplots
 from core.market_structure import analyze_market_structure
 from core.liquidity import analyze_liquidity
 from core.fvg import analyze_fvg
+from core.order_blocks import analyze_order_blocks
 warnings.filterwarnings('ignore')
 
 st.set_page_config(page_title="MIMI-AI", page_icon="🏛️", layout="wide")
@@ -1020,7 +1021,7 @@ def monitor_automatico(par_seleccionado, stf_activo):
 # principal (barra superior con categorías). La sidebar es solo CONFIG.
 NAV_GROUPS = [
     ("Principal",    [("senal","Señal"), ("monitor","Monitor")]),
-    ("Análisis",     [("estructura","Estructura"), ("market_structure","Market Structure"), ("liquidity","Liquidity"), ("fvg","FVG"), ("multitf","Multi-TF"), ("grafica","Gráfica")]),
+    ("Análisis",     [("estructura","Estructura"), ("market_structure","Market Structure"), ("liquidity","Liquidity"), ("fvg","FVG"), ("order_blocks","Order Blocks"), ("multitf","Multi-TF"), ("grafica","Gráfica")]),
     ("Operar",       [("paper","Paper"), ("historial","Historial")]),
     ("Herramientas", [("chat","Chat"), ("alertas","Alertas"), ("backtest","Backtest")]),
 ]
@@ -1775,6 +1776,132 @@ if st.session_state.page == 'fvg':
                     legend=dict(bgcolor='#000', bordercolor='#222', orientation='h'))
                 st.plotly_chart(fig_fvg, use_container_width=True)
                 st.caption("Zonas verdes = FVG alcistas activos · Zonas rojas = FVG bajistas activos")
+            except Exception as e:
+                st.info(f"No se pudo dibujar el overlay (el panel de arriba sigue siendo válido). Detalle: {e}")
+
+# ── PÁGINA — 🧱 Order Blocks (core/order_blocks.py) ──────────────────
+# Sistema paralelo, solo informativo. NO cambia señal, score, Telegram,
+# Gemini, ML, Wyckoff, paper trading, Market Structure, Liquidity ni FVG.
+if st.session_state.page == 'order_blocks':
+    st.markdown(f'<div style="font-family:Cinzel,serif;color:{T["primary"]};font-size:1.1em;letter-spacing:2px;margin-bottom:2px;">🧱 Order Blocks</div>', unsafe_allow_html=True)
+    st.caption(f"Motor nuevo e independiente (`core/order_blocks.py`) · {PAR} · Es solo informativo — todavía no cambia la señal ni el score de MIMI.")
+
+    colcfg1, colcfg2, colcfg3 = st.columns(3)
+    with colcfg1:
+        ob_zone_method = st.selectbox("Zona usa", ["high_low", "open_close", "body_wick"], index=0, key="ob_zone_method")
+    with colcfg2:
+        ob_criterio = st.selectbox("Criterio de mitigación", ["touch", "50%", "full"], index=1, key="ob_criterio")
+    with colcfg3:
+        ob_disp_mult = st.number_input("Desplazamiento mínimo (x ATR)", min_value=0.5, max_value=5.0, value=1.5, step=0.1, key="ob_disp_mult")
+
+    colcfg4, colcfg5 = st.columns(2)
+    with colcfg4:
+        ob_usar_bos = st.checkbox("Exigir BOS real (usa Market Structure)", value=False, key="ob_usar_bos",
+                                   help="Si lo activas, además del desplazamiento se exige una ruptura de estructura real para confirmar el OB.")
+    with colcfg5:
+        ob_usar_contexto = st.checkbox("Usar Liquidity + FVG como contexto adicional", value=False, key="ob_usar_contexto",
+                                        help="Marca si el OB nace cerca de un liquidity sweep o se solapa con un FVG — suma a su 'strength'.")
+
+    ob_usar_demo = st.checkbox("Usar datos simulados de prueba", value=False, key="ob_usar_demo")
+    if ob_usar_demo:
+        from core.order_blocks import _generar_datos_ob_bullish
+        df_ob_input = _generar_datos_ob_bullish()
+        st.caption("Usando datos OHLC simulados (no son precios reales) — diseñados para mostrar un Order Block de principio a fin.")
+    else:
+        df_ob_input = df_entry
+
+    ob_error = None
+    df_ob_out, ob_summary = None, None
+    if df_ob_input is None or len(df_ob_input) == 0:
+        ob_error = "No hay datos OHLC disponibles todavía para este par (DataFrame vacío)."
+    elif len(df_ob_input) < 5:
+        st.warning("⚠️ Se necesitan varias velas para que pueda existir un Order Block confirmado (vela de origen + ventana de desplazamiento).")
+
+    if ob_error is None:
+        try:
+            ms_df_ob = None
+            if ob_usar_bos:
+                ms_df_ob, _ = analyze_market_structure(df_ob_input, swing_order=5)
+            liq_df_ob, fvg_df_ob = None, None
+            if ob_usar_contexto:
+                liq_df_ob, _ = analyze_liquidity(df_ob_input, swing_order=5, equal_tolerance_pct=0.05)
+                fvg_df_ob, _ = analyze_fvg(df_ob_input, mitigation_criterion=ob_criterio)
+            df_ob_out, ob_summary = analyze_order_blocks(
+                df_ob_input, market_structure_df=ms_df_ob, liquidity_df=liq_df_ob, fvg_df=fvg_df_ob,
+                zone_method=ob_zone_method, displacement_atr_mult=ob_disp_mult,
+                require_bos=ob_usar_bos, mitigation_criterion=ob_criterio)
+        except Exception as e:
+            ob_error = f"{type(e).__name__}: {e}"
+
+    if ob_error:
+        st.error(f"⚠️ El motor de Order Blocks no pudo correr — la app y la estrategia actual siguen funcionando normal. Detalle: {ob_error}")
+    else:
+        c_ob1, c_ob2 = st.columns(2)
+        with c_ob1:
+            st.markdown('<div class="card"><div class="card-title">BULLISH OB ACTIVOS</div>', unsafe_allow_html=True)
+            activos_bull_ob = ob_summary['active_bullish_obs']
+            if activos_bull_ob:
+                for z in activos_bull_ob:
+                    st.markdown(f"🟢 {pf(z['bottom'],PAR)} — {pf(z['top'],PAR)}  ·  {z['status']} ({z['freshness']})  ·  strength {z['strength']}")
+            else:
+                st.markdown("No detectado")
+            st.markdown('</div>', unsafe_allow_html=True)
+
+            st.markdown('<div class="card"><div class="card-title">ÚLTIMO BULLISH OB</div>', unsafe_allow_html=True)
+            lb_ob = ob_summary['last_bullish_ob']
+            if lb_ob:
+                st.markdown(f"**Rango:** {pf(lb_ob['bottom'],PAR)} — {pf(lb_ob['top'],PAR)}  ·  Midpoint: {pf(lb_ob['midpoint'],PAR)}")
+                st.markdown(f"**Estado:** {lb_ob['status']}  ·  Freshness: {lb_ob['freshness']}  ·  Toques: {lb_ob['number_of_touches']}")
+                st.markdown(f"**Strength:** {lb_ob['strength']}/100  ·  Desplazamiento: {lb_ob['displacement_atr']}x ATR  ·  BOS: {'Sí' if lb_ob['bos_confirmed'] else 'No'}")
+            else:
+                st.markdown("No detectado")
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        with c_ob2:
+            st.markdown('<div class="card"><div class="card-title">BEARISH OB ACTIVOS</div>', unsafe_allow_html=True)
+            activos_bear_ob = ob_summary['active_bearish_obs']
+            if activos_bear_ob:
+                for z in activos_bear_ob:
+                    st.markdown(f"🔴 {pf(z['bottom'],PAR)} — {pf(z['top'],PAR)}  ·  {z['status']} ({z['freshness']})  ·  strength {z['strength']}")
+            else:
+                st.markdown("No detectado")
+            st.markdown('</div>', unsafe_allow_html=True)
+
+            st.markdown('<div class="card"><div class="card-title">ÚLTIMO BEARISH OB</div>', unsafe_allow_html=True)
+            lbear_ob = ob_summary['last_bearish_ob']
+            if lbear_ob:
+                st.markdown(f"**Rango:** {pf(lbear_ob['bottom'],PAR)} — {pf(lbear_ob['top'],PAR)}  ·  Midpoint: {pf(lbear_ob['midpoint'],PAR)}")
+                st.markdown(f"**Estado:** {lbear_ob['status']}  ·  Freshness: {lbear_ob['freshness']}  ·  Toques: {lbear_ob['number_of_touches']}")
+                st.markdown(f"**Strength:** {lbear_ob['strength']}/100  ·  Desplazamiento: {lbear_ob['displacement_atr']}x ATR  ·  BOS: {'Sí' if lbear_ob['bos_confirmed'] else 'No'}")
+            else:
+                st.markdown("No detectado")
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        st.markdown('<div class="card"><div class="card-title">MÁS CERCANOS AL PRECIO ACTUAL</div>', unsafe_allow_html=True)
+        nb = ob_summary['nearest_bullish_ob']
+        nbear = ob_summary['nearest_bearish_ob']
+        st.markdown(f"**Demanda (bullish) más cercana por debajo:** " + (f"{pf(nb['bottom'],PAR)}—{pf(nb['top'],PAR)}" if nb else "No detectado"))
+        st.markdown(f"**Oferta (bearish) más cercana por arriba:** " + (f"{pf(nbear['bottom'],PAR)}—{pf(nbear['top'],PAR)}" if nbear else "No detectado"))
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        # ── Overlay opcional sobre gráfica — autocontenido ──────────
+        with st.expander("📈 Ver en gráfica (zonas de Order Blocks)", expanded=False):
+            try:
+                dfg = df_ob_out.tail(150).copy()
+                fig_ob = go.Figure()
+                fig_ob.add_trace(go.Candlestick(
+                    x=dfg.index, open=dfg['open'], high=dfg['high'], low=dfg['low'], close=dfg['close'],
+                    increasing_line_color='#4CAF82', decreasing_line_color='#C0392B', name=PAR))
+                for z in activos_bull_ob:
+                    fig_ob.add_hrect(y0=z['bottom'], y1=z['top'], fillcolor='rgba(76,175,130,0.15)', line_width=0)
+                for z in activos_bear_ob:
+                    fig_ob.add_hrect(y0=z['bottom'], y1=z['top'], fillcolor='rgba(192,57,43,0.15)', line_width=0)
+                fig_ob.update_layout(paper_bgcolor='#000', plot_bgcolor='#050300',
+                    font=dict(color='#888', family='Philosopher,serif'),
+                    xaxis_rangeslider_visible=False, height=440, margin=dict(l=0,r=0,t=20,b=0),
+                    legend=dict(bgcolor='#000', bordercolor='#222', orientation='h'))
+                st.plotly_chart(fig_ob, use_container_width=True)
+                st.caption("Zonas verdes = Bullish OB activos · Zonas rojas = Bearish OB activos")
             except Exception as e:
                 st.info(f"No se pudo dibujar el overlay (el panel de arriba sigue siendo válido). Detalle: {e}")
 
