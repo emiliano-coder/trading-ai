@@ -18,6 +18,7 @@ from core.market_structure import analyze_market_structure
 from core.liquidity import analyze_liquidity
 from core.fvg import analyze_fvg
 from core.order_blocks import analyze_order_blocks
+from core.multi_timeframe import analyze_multi_timeframe
 warnings.filterwarnings('ignore')
 
 st.set_page_config(page_title="MIMI-AI", page_icon="🏛️", layout="wide")
@@ -1021,7 +1022,7 @@ def monitor_automatico(par_seleccionado, stf_activo):
 # principal (barra superior con categorías). La sidebar es solo CONFIG.
 NAV_GROUPS = [
     ("Principal",    [("senal","Señal"), ("monitor","Monitor")]),
-    ("Análisis",     [("estructura","Estructura"), ("market_structure","Market Structure"), ("liquidity","Liquidity"), ("fvg","FVG"), ("order_blocks","Order Blocks"), ("multitf","Multi-TF"), ("grafica","Gráfica")]),
+    ("Análisis",     [("estructura","Estructura"), ("market_structure","Market Structure"), ("liquidity","Liquidity"), ("fvg","FVG"), ("order_blocks","Order Blocks"), ("multi_timeframe","Multi-Timeframe"), ("multitf","Multi-TF"), ("grafica","Gráfica")]),
     ("Operar",       [("paper","Paper"), ("historial","Historial")]),
     ("Herramientas", [("chat","Chat"), ("alertas","Alertas"), ("backtest","Backtest")]),
 ]
@@ -1904,6 +1905,131 @@ if st.session_state.page == 'order_blocks':
                 st.caption("Zonas verdes = Bullish OB activos · Zonas rojas = Bearish OB activos")
             except Exception as e:
                 st.info(f"No se pudo dibujar el overlay (el panel de arriba sigue siendo válido). Detalle: {e}")
+
+# ── PÁGINA — 🌐 Multi-Timeframe (core/multi_timeframe.py) ────────────
+# Sistema paralelo, solo informativo. NO cambia señal, score, Telegram,
+# Gemini, ML, Wyckoff, paper trading ni los demás motores de core/.
+# (La página "Multi-TF" de más abajo es la antigua y sigue intacta.)
+@st.cache_data(ttl=120, show_spinner=False)
+def _mtf_analizar_cached(df_base, htf_freq, mtf_freq, ltf_freq, swing_order):
+    return analyze_multi_timeframe(df=df_base, htf_freq=htf_freq, mtf_freq=mtf_freq,
+                                   ltf_freq=ltf_freq, swing_order=swing_order)
+
+if st.session_state.page == 'multi_timeframe':
+    st.markdown(f'<div style="font-family:Cinzel,serif;color:{T["primary"]};font-size:1.1em;letter-spacing:2px;margin-bottom:2px;">🌐 Multi-Timeframe</div>', unsafe_allow_html=True)
+    st.caption(f"Motor nuevo e independiente (`core/multi_timeframe.py`) · {PAR} · Es solo informativo — todavía no cambia la señal ni el score de MIMI. Descarga solo el timeframe más fino y resamplea HTF/MTF de forma causal.")
+
+    cm1, cm2, cm3, cm4 = st.columns(4)
+    with cm1:
+        mtf_ltf = st.selectbox("LTF (se descarga)", ["15min", "30min", "5min"], index=0, key="mtf_ltf")
+    with cm2:
+        mtf_mtf = st.selectbox("MTF (resampleado)", ["1h", "30min", "2h"], index=0, key="mtf_mtf")
+    with cm3:
+        mtf_htf = st.selectbox("HTF (resampleado)", ["4h", "2h", "1d"], index=0, key="mtf_htf")
+    with cm4:
+        mtf_swing = st.slider("Sensibilidad del swing", 2, 10, 5, key="mtf_swing")
+    mtf_nvelas = st.slider("Velas del LTF a analizar", 200, 1500, 600, step=50, key="mtf_nvelas")
+    mtf_usar_demo = st.checkbox("Usar datos simulados de prueba", value=False, key="mtf_usar_demo")
+
+    mtf_error, df_mtf_out, mtf_summary = None, None, None
+    mtf_base = None
+    if mtf_usar_demo:
+        from core.multi_timeframe import _ltf_largo
+        mtf_base = _ltf_largo(min(mtf_nvelas, 1500))
+        mtf_ltf_eff = "15min"
+        st.caption("Usando datos M15 simulados (no son precios reales).")
+    else:
+        _mapa_yf = {"15min": "15m", "30min": "30m", "5min": "5m"}
+        mtf_ltf_eff = mtf_ltf
+        mtf_base_raw = get_data(PC['yf_symbol'], _mapa_yf[mtf_ltf], "30d")
+        if mtf_base_raw is None or len(mtf_base_raw) == 0:
+            mtf_error = "No hay datos disponibles para este par/timeframe ahorita (¿mercado cerrado?)."
+        else:
+            mtf_base = mtf_base_raw.tail(mtf_nvelas)
+            _paso = mtf_base.index.to_series().diff().median()
+            if pd.notna(_paso) and abs(_paso - pd.Timedelta(mtf_ltf)) > pd.Timedelta("1min"):
+                mtf_error = (f"Los datos recibidos tienen resolución {_paso}, no {mtf_ltf} — "
+                             f"el proveedor no entregó ese timeframe. Prueba con 'Usar datos simulados de prueba'.")
+    if mtf_error is None:
+        _jerarquia_ok = pd.Timedelta(mtf_htf) > pd.Timedelta(mtf_mtf) > pd.Timedelta(mtf_ltf_eff)
+        if not _jerarquia_ok:
+            mtf_error = "La jerarquía debe ser HTF > MTF > LTF. Ajusta los selectores."
+
+    if mtf_error is None:
+        try:
+            df_mtf_out, mtf_summary = _mtf_analizar_cached(mtf_base, mtf_htf, mtf_mtf, mtf_ltf_eff, mtf_swing)
+        except Exception as e:
+            mtf_error = f"{type(e).__name__}: {e}"
+
+    if mtf_error:
+        st.error(f"⚠️ El motor Multi-Timeframe no pudo correr — la app y la estrategia actual siguen funcionando normal. Detalle: {mtf_error}")
+    else:
+        def _color_bias(b):
+            return '#4CAF82' if b == 'bullish' else '#C0392B' if b == 'bearish' else T['primary']
+        al = mtf_summary['alignment']
+        al_color = '#4CAF82' if 'bullish' in al else '#C0392B' if 'bearish' in al else T['primary']
+
+        if mtf_summary['insufficient_timeframes']:
+            st.warning("⚠️ Datos insuficientes o muy pocas velas en: " + ", ".join(t.upper() for t in mtf_summary['insufficient_timeframes']) +
+                       " — su lectura puede ser poco fiable. Sube 'Velas del LTF a analizar' o baja la sensibilidad.")
+
+        cb1, cb2, cb3, cb4 = st.columns(4)
+        for col, tf in zip((cb1, cb2, cb3), ("htf", "mtf", "ltf")):
+            b = mtf_summary[f"{tf}_bias"]
+            col.markdown(f'<div class="card"><div class="card-title">{tf.upper()} · {mtf_summary["timeframes"][tf]}</div>'
+                         f'<span style="color:{_color_bias(b)};font-family:Cinzel,serif;font-size:1.2em;letter-spacing:2px;">{(b or "sin datos").upper()}</span></div>',
+                         unsafe_allow_html=True)
+        cb4.markdown(f'<div class="card"><div class="card-title">ALINEACIÓN</div>'
+                     f'<span style="color:{al_color};font-family:Cinzel,serif;font-size:1.0em;letter-spacing:1px;">{al.replace("_"," ").upper()}</span><br>'
+                     f'Score: <b>{mtf_summary["alignment_score"]}/100</b> · Sesgo general: {mtf_summary["overall_bias"]}</div>',
+                     unsafe_allow_html=True)
+
+        cc1, cc2, cc3 = st.columns(3)
+        with cc1:
+            st.markdown('<div class="card"><div class="card-title">CONFLUENCIAS BULLISH</div>', unsafe_allow_html=True)
+            for x in mtf_summary['bullish_confluences'] or ["No detectado"]:
+                st.markdown(f"🟢 {x}" if x != "No detectado" else x)
+            st.markdown('</div>', unsafe_allow_html=True)
+        with cc2:
+            st.markdown('<div class="card"><div class="card-title">CONFLUENCIAS BEARISH</div>', unsafe_allow_html=True)
+            for x in mtf_summary['bearish_confluences'] or ["No detectado"]:
+                st.markdown(f"🔴 {x}" if x != "No detectado" else x)
+            st.markdown('</div>', unsafe_allow_html=True)
+        with cc3:
+            st.markdown('<div class="card"><div class="card-title">CONFLICTOS</div>', unsafe_allow_html=True)
+            for x in mtf_summary['conflicts'] or ["Ninguno detectado"]:
+                st.markdown(f"⚠️ {x}" if x != "Ninguno detectado" else x)
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        with st.expander("🔎 Detalle por timeframe (estructura, liquidez, FVG, OB)", expanded=False):
+            filas = []
+            for tf in ("htf", "mtf", "ltf"):
+                d = mtf_summary['per_timeframe'].get(tf)
+                if not d:
+                    filas.append({"TF": tf.upper(), "velas": 0})
+                    continue
+                filas.append({
+                    "TF": f"{tf.upper()} ({mtf_summary['timeframes'][tf]})", "velas": d['bars'], "tendencia": d['trend'],
+                    "último BOS": (d['last_bos'] or {}).get('direction', "No detectado"),
+                    "último CHoCH": (d['last_choch'] or {}).get('direction', "No detectado"),
+                    "EQH activos": d['active_eqh'], "EQL activos": d['active_eql'],
+                    "FVG ↑ activos": d['fvg_active_bullish'], "FVG ↓ activos": d['fvg_active_bearish'], "FVG mitigados": d['fvg_mitigated'],
+                    "OB ↑ activos": d['ob_active_bullish'], "OB ↓ activos": d['ob_active_bearish'],
+                    "OB fresh ↑/↓": f"{d['ob_fresh_bullish']}/{d['ob_fresh_bearish']}",
+                    "OB touched": d['ob_touched'], "OB mitigados": d['ob_mitigated'],
+                })
+            st.dataframe(pd.DataFrame(filas), use_container_width=True)
+
+        with st.expander("🕰️ ¿Qué sabía MIMI en este momento?", expanded=False):
+            st.caption("Elige una vela del LTF: se muestra el contexto HTF/MTF disponible EXACTAMENTE en ese momento (nunca velas que aún no habían cerrado).")
+            ultimos = df_mtf_out.tail(60)
+            etiquetas_ts = [str(t) for t in ultimos['timestamp']]
+            elegido = st.selectbox("Momento evaluado (timestamp de cierre de la vela LTF)", etiquetas_ts[::-1], index=0, key="mtf_ts_sel")
+            fila = ultimos[ultimos['timestamp'].astype(str) == elegido].iloc[-1]
+            st.dataframe(fila.astype(str).to_frame("valor"), use_container_width=True)
+
+        with st.expander("📋 Últimas filas del contexto (columnas completas)", expanded=False):
+            st.dataframe(df_mtf_out.tail(15), use_container_width=True)
 
 # ── TAB 3: MULTI-TF (confluencia genérica, independiente de la estrategia principal) ──
 if st.session_state.page == 'multitf':
