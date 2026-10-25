@@ -19,6 +19,7 @@ from core.liquidity import analyze_liquidity
 from core.fvg import analyze_fvg
 from core.order_blocks import analyze_order_blocks
 from core.multi_timeframe import analyze_multi_timeframe
+from core.setup_engine import detect_setups, setups_to_dataframe
 warnings.filterwarnings('ignore')
 
 st.set_page_config(page_title="MIMI-AI", page_icon="🏛️", layout="wide")
@@ -1022,7 +1023,7 @@ def monitor_automatico(par_seleccionado, stf_activo):
 # principal (barra superior con categorías). La sidebar es solo CONFIG.
 NAV_GROUPS = [
     ("Principal",    [("senal","Señal"), ("monitor","Monitor")]),
-    ("Análisis",     [("estructura","Estructura"), ("market_structure","Market Structure"), ("liquidity","Liquidity"), ("fvg","FVG"), ("order_blocks","Order Blocks"), ("multi_timeframe","Multi-Timeframe"), ("multitf","Multi-TF"), ("grafica","Gráfica")]),
+    ("Análisis",     [("estructura","Estructura"), ("market_structure","Market Structure"), ("liquidity","Liquidity"), ("fvg","FVG"), ("order_blocks","Order Blocks"), ("multi_timeframe","Multi-Timeframe"), ("setup_engine","Setup Engine"), ("multitf","Multi-TF"), ("grafica","Gráfica")]),
     ("Operar",       [("paper","Paper"), ("historial","Historial")]),
     ("Herramientas", [("chat","Chat"), ("alertas","Alertas"), ("backtest","Backtest")]),
 ]
@@ -2030,6 +2031,134 @@ if st.session_state.page == 'multi_timeframe':
 
         with st.expander("📋 Últimas filas del contexto (columnas completas)", expanded=False):
             st.dataframe(df_mtf_out.tail(15), use_container_width=True)
+
+# ── PÁGINA — 🎯 Setup Engine (core/setup_engine.py) ──────────────────
+# Sistema paralelo, solo informativo. NO cambia BUY/SELL/WAIT, el scoring,
+# Telegram, Gemini, ML, Wyckoff ni las operaciones. Los niveles que muestra
+# son REFERENCIAS ANALÍTICAS, no órdenes ejecutables.
+@st.cache_data(ttl=120, show_spinner=False)
+def _setup_engine_cached(df_base, symbol, cfg_dict, ctx_df):
+    return detect_setups(df_base, symbol, cfg_dict, context=ctx_df)
+
+if st.session_state.page == 'setup_engine':
+    st.markdown(f'<div style="font-family:Cinzel,serif;color:{T["primary"]};font-size:1.1em;letter-spacing:2px;margin-bottom:2px;">🎯 Setup Engine</div>', unsafe_allow_html=True)
+    st.caption(f"Motor nuevo e independiente (`core/setup_engine.py`) · {PAR} · Combina Market Structure + Liquidity + FVG + Order Blocks + Multi-Timeframe. "
+               "Es solo informativo: NO cambia la señal ni el score de MIMI y NO ejecuta operaciones. Un setup `confirmed` solo significa que cumplió las reglas — "
+               "no es una probabilidad de éxito ni está validado estadísticamente.")
+
+    se_usar_demo = st.checkbox("Usar datos simulados de prueba", value=False, key="se_usar_demo")
+    sc1, sc2, sc3, sc4 = st.columns(4)
+    with sc1:
+        se_swing = st.slider("Sensibilidad del swing", 2, 10, 2 if se_usar_demo else 5, key="se_swing")
+    with sc2:
+        se_ventana = st.slider("Ventana cambio de estructura (velas)", 3, 30, 12, key="se_ventana")
+    with sc3:
+        se_vigencia = st.slider("Vigencia máx. sin confirmar (velas)", 10, 150, 60, key="se_vigencia")
+    with sc4:
+        se_apoyo = st.checkbox("Exigir contexto a favor (no solo 'no contradictorio')", value=False, key="se_apoyo")
+
+    se_symbol = PC['td_symbol'].replace("/", "")
+    se_error, se_base, se_ctx = None, None, None
+    if se_usar_demo:
+        from core.setup_engine import _escenarios_demo
+        _esc = _escenarios_demo()
+        se_nombre = st.selectbox("Escenario simulado", list(_esc.keys()), key="se_escenario")
+        se_base, se_ctx = _esc[se_nombre]
+        st.caption("Datos OHLC y contexto HTF/MTF simulados (no son precios reales). Usa sensibilidad 2 para que los motores detecten los swings de estos escenarios.")
+    else:
+        se_nvelas = st.slider("Velas M15 a analizar", 200, 1500, 600, step=50, key="se_nvelas")
+        _raw = get_data(PC['yf_symbol'], "15m", "30d")
+        if _raw is None or len(_raw) == 0:
+            se_error = "No hay datos M15 disponibles para este par ahorita (¿mercado cerrado?)."
+        else:
+            se_base = _raw.tail(se_nvelas)
+            _paso = se_base.index.to_series().diff().median()
+            if pd.notna(_paso) and abs(_paso - pd.Timedelta("15min")) > pd.Timedelta("1min"):
+                se_error = (f"Los datos recibidos tienen resolución {_paso}, no 15min — el proveedor no entregó ese timeframe. "
+                            f"Prueba con 'Usar datos simulados de prueba'.")
+
+    se_setups, se_resumen = [], None
+    if se_error is None:
+        try:
+            _cfg = dict(swing_order=se_swing, equal_tolerance_pct=0.1 if se_usar_demo else 0.05,
+                        structure_window=se_ventana, max_age_bars=se_vigencia, require_supportive_context=se_apoyo)
+            se_setups, se_resumen = _setup_engine_cached(se_base, se_symbol, _cfg, se_ctx)
+        except Exception as e:
+            se_error = f"{type(e).__name__}: {e}"
+
+    if se_error:
+        st.error(f"⚠️ El Setup Engine no pudo correr — la app y la estrategia actual siguen funcionando normal. Detalle: {se_error}")
+    else:
+        if se_resumen['insufficient_data']:
+            st.warning(f"⚠️ Datos insuficientes para buscar setups: {se_resumen['reason']}.")
+        if se_resumen['modules_unavailable']:
+            st.warning("Módulos sin información en esta corrida: " + ", ".join(se_resumen['modules_unavailable']) +
+                       " — las condiciones que dependen de ellos NO se dan por cumplidas.")
+        if se_resumen['errors']:
+            with st.expander("Detalle técnico de módulos con error"):
+                for _e in se_resumen['errors']:
+                    st.code(_e)
+
+        m1, m2, m3, m4, m5 = st.columns(5)
+        m1.metric("Setups detectados", se_resumen['total_setups'])
+        m2.metric("Completos (confirmed)", se_resumen['complete'])
+        m3.metric("Parciales (forming/candidate)", se_resumen['partial'])
+        m4.metric("Descartados (invalidated/expired)", se_resumen['discarded'])
+        m5.metric("Contexto HTF/MTF", "disponible" if se_resumen['context_available'] else "sin datos")
+
+        _emoji = {"forming": "🟡", "candidate": "🟠", "confirmed": "🟢", "invalidated": "🔴", "expired": "⚪"}
+        if se_setups:
+            f1, f2 = st.columns(2)
+            with f1:
+                _f_estado = st.multiselect("Filtrar por estado", ["forming", "candidate", "confirmed", "invalidated", "expired"],
+                                           default=["forming", "candidate", "confirmed", "invalidated", "expired"], key="se_f_estado")
+            with f2:
+                _f_dir = st.multiselect("Filtrar por dirección", ["bullish", "bearish"], default=["bullish", "bearish"], key="se_f_dir")
+            visibles = [x for x in se_setups if x['status'] in _f_estado and x['direction'] in _f_dir]
+
+            _df_set = setups_to_dataframe(visibles)
+            if not _df_set.empty:
+                _show = pd.DataFrame({
+                    "estado": [f"{_emoji[x['status']]} {x['status']}" for x in visibles],
+                    "dirección": _df_set["direction"], "creado": _df_set["created_at"].astype(str),
+                    "confirmado": _df_set["confirmed_at"].astype(str).replace("NaT", "—").replace("None", "—"),
+                    "zona (ref.)": [f"{pf(x['entry_zone_low'],PAR)} — {pf(x['entry_zone_high'],PAR)}" if x['entry_zone_low'] is not None else "—" for x in visibles],
+                    "invalidación (ref.)": [pf(x['invalidation_price'],PAR) for x in visibles],
+                    "objetivo (ref.)": [pf(x['target_reference'],PAR) if x['target_reference'] is not None else "—" for x in visibles],
+                    "cumplidas": [", ".join(x['conditions_met']) for x in visibles],
+                    "faltan": [", ".join(x['conditions_missing']) or "—" for x in visibles],
+                })
+                st.dataframe(_show, use_container_width=True)
+            st.caption("Zona, invalidación y objetivo son referencias analíticas — NO son órdenes ni recomendaciones de entrada/stop/target.")
+
+            for x in visibles[::-1][:25]:
+                with st.expander(f"{_emoji[x['status']]} {x['setup_id']} — {x['direction']} — {x['status']}"):
+                    st.markdown(f"**Por qué está en este estado:** {x['status_reason']}")
+                    ca, cb = st.columns(2)
+                    with ca:
+                        st.markdown("**✅ Condiciones cumplidas**")
+                        st.markdown("\n".join(f"- `{c_}`" for c_ in x['conditions_met']) or "- ninguna")
+                        st.markdown("**🧩 Módulos que aportaron evidencia**")
+                        st.markdown(", ".join(x['evidence_modules']))
+                    with cb:
+                        st.markdown("**❌ Condiciones faltantes**")
+                        st.markdown("\n".join(f"- `{c_}`" for c_ in x['conditions_missing']) or "- ninguna")
+                        st.markdown("**⚠️ Contradicciones**")
+                        st.markdown("\n".join(f"- {c_}" for c_ in x['contradictions']) or "- ninguna detectada")
+                    if x['invalidation_reason']:
+                        st.error(f"Razón de invalidación: {x['invalidation_reason']}")
+                    if x['expiry_reason']:
+                        st.warning(f"Razón de expiración: {x['expiry_reason']}")
+                    st.markdown(f"**Marcas de tiempo** · creado: `{x['created_at']}` · confirmado: `{x['confirmed_at']}` · último cambio: `{x['timestamp']}`")
+                    st.markdown(f"**Referencias analíticas** · zona: {pf(x['entry_zone_low'],PAR) if x['entry_zone_low'] is not None else 'None'} — "
+                                f"{pf(x['entry_zone_high'],PAR) if x['entry_zone_high'] is not None else 'None'} ({x['entry_zone_source'] or 'sin zona'}) · "
+                                f"invalidación/stop: {pf(x['stop_reference'],PAR)} · objetivo: {pf(x['target_reference'],PAR) if x['target_reference'] is not None else 'None'}")
+                    st.markdown("**Historial de estados**")
+                    st.dataframe(pd.DataFrame([{"timestamp": h_["timestamp"], "estado": h_["status"],
+                                                "cumplidas": ", ".join(h_["conditions_met"]), "razón": h_["status_reason"]} for h_ in x['history']]),
+                                 use_container_width=True)
+        else:
+            st.info("No se detectó ningún setup en esta ventana de datos (ningún sweep de liquidez relevante con las reglas actuales).")
 
 # ── TAB 3: MULTI-TF (confluencia genérica, independiente de la estrategia principal) ──
 if st.session_state.page == 'multitf':
