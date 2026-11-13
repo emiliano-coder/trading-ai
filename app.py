@@ -20,6 +20,7 @@ from core.fvg import analyze_fvg
 from core.order_blocks import analyze_order_blocks
 from core.multi_timeframe import analyze_multi_timeframe
 from core.setup_engine import detect_setups, setups_to_dataframe
+from core.confluence_engine import analyze_confluence, confluence_series
 warnings.filterwarnings('ignore')
 
 st.set_page_config(page_title="MIMI-AI", page_icon="🏛️", layout="wide")
@@ -1023,7 +1024,7 @@ def monitor_automatico(par_seleccionado, stf_activo):
 # principal (barra superior con categorías). La sidebar es solo CONFIG.
 NAV_GROUPS = [
     ("Principal",    [("senal","Señal"), ("monitor","Monitor")]),
-    ("Análisis",     [("estructura","Estructura"), ("market_structure","Market Structure"), ("liquidity","Liquidity"), ("fvg","FVG"), ("order_blocks","Order Blocks"), ("multi_timeframe","Multi-Timeframe"), ("setup_engine","Setup Engine"), ("multitf","Multi-TF"), ("grafica","Gráfica")]),
+    ("Análisis",     [("estructura","Estructura"), ("market_structure","Market Structure"), ("liquidity","Liquidity"), ("fvg","FVG"), ("order_blocks","Order Blocks"), ("multi_timeframe","Multi-Timeframe"), ("setup_engine","Setup Engine"), ("confluence_engine","Confluence Engine"), ("multitf","Multi-TF"), ("grafica","Gráfica")]),
     ("Operar",       [("paper","Paper"), ("historial","Historial")]),
     ("Herramientas", [("chat","Chat"), ("alertas","Alertas"), ("backtest","Backtest")]),
 ]
@@ -2159,6 +2160,139 @@ if st.session_state.page == 'setup_engine':
                                  use_container_width=True)
         else:
             st.info("No se detectó ningún setup en esta ventana de datos (ningún sweep de liquidez relevante con las reglas actuales).")
+
+# ── PÁGINA — 🔗 Confluence Engine (core/confluence_engine.py) ─────────
+# Sistema paralelo, solo informativo. NO cambia BUY/SELL/WAIT, el scoring, Telegram,
+# Gemini, ML, Wyckoff ni las operaciones. El score mide COINCIDENCIA de evidencias:
+# NO es una probabilidad de éxito.
+@st.cache_data(ttl=120, show_spinner=False)
+def _confluence_cached(df_base, frames, symbol, cfg_dict):
+    return analyze_confluence(df=df_base, symbol=symbol, config=cfg_dict, frames=frames)
+
+@st.cache_data(ttl=120, show_spinner=False)
+def _confluence_serie_cached(df_base, frames, symbol, cfg_dict, n_ultimas):
+    return confluence_series(df=df_base, symbol=symbol, config=cfg_dict, frames=frames, last_n=n_ultimas)
+
+if st.session_state.page == 'confluence_engine':
+    st.markdown(f'<div style="font-family:Cinzel,serif;color:{T["primary"]};font-size:1.1em;letter-spacing:2px;margin-bottom:2px;">🔗 Confluence Engine</div>', unsafe_allow_html=True)
+    st.caption(f"Motor nuevo e independiente (`core/confluence_engine.py`) · {PAR} · Combina Market Structure + Liquidity + FVG + Order Blocks + Multi-Timeframe + Setup Engine. "
+               "Es solo informativo: NO cambia la señal ni el score de MIMI y NO ejecuta operaciones. "
+               "**El score mide la coincidencia de evidencias ponderadas; un 80 NO significa 80% de probabilidad de ganar.**")
+
+    ce_demo = st.checkbox("Usar datos simulados de prueba", value=False, key="ce_demo")
+    ce_c1, ce_c2, ce_c3 = st.columns(3)
+    with ce_c1:
+        ce_swing = st.slider("Sensibilidad del swing", 2, 10, 2 if ce_demo else 5, key="ce_swing")
+    with ce_c2:
+        ce_neutral = st.slider("Umbral 'neutral' (score mínimo direccional)", 5, 50, 30, key="ce_neutral")
+    with ce_c3:
+        ce_fuerte = st.slider("Umbral 'strong' (score)", 30, 90, 55, key="ce_fuerte")
+
+    with st.expander("⚖️ Pesos de cada categoría (suman 100 por defecto)"):
+        _w = {}
+        _cols = st.columns(6)
+        _defs = {"structure": 25, "liquidity": 15, "fvg": 10, "order_block": 15, "multi_timeframe": 10, "setup": 25}
+        for _col, (_cat, _dv) in zip(_cols, _defs.items()):
+            _w[_cat] = float(_col.number_input(_cat, min_value=0, max_value=100, value=_dv, step=5, key=f"ce_w_{_cat}"))
+        st.caption("Cada evidencia puntúa: peso de categoría × peso del timeframe (HTF 0.5 · MTF 0.3 · LTF 0.2) × fuerza. "
+                   "Las evidencias que repiten un mismo hecho (p. ej. el BOS que ya usó un setup) no se suman dos veces.")
+
+    ce_cfg = dict(swing_order=ce_swing, equal_tolerance_pct=0.1 if ce_demo else 0.05, neutral_below=float(ce_neutral),
+                  strong_at=float(ce_fuerte), weights=_w)
+    ce_error, ce_res, ce_base, ce_frames, ce_symbol = None, None, None, None, PC['td_symbol'].replace("/", "")
+    if ce_demo:
+        from core.confluence_engine import _escenarios_confluencia
+        _esc = _escenarios_confluencia()
+        ce_nombre = st.selectbox("Escenario simulado", list(_esc.keys()), key="ce_escenario")
+        ce_frames, ce_symbol = _esc[ce_nombre]["frames"], _esc[ce_nombre]["symbol"]
+        ce_cfg.update({k: v for k, v in _esc[ce_nombre]["config"].items() if k not in ("swing_order",)})
+        ce_cfg["swing_order"] = ce_swing
+        st.caption("Datos y contexto HTF/MTF simulados (no son precios reales). Usa sensibilidad 2 para estos escenarios.")
+    else:
+        ce_nvelas = st.slider("Velas M15 a analizar", 200, 1500, 600, step=50, key="ce_nvelas")
+        _raw = get_data(PC['yf_symbol'], "15m", "30d")
+        if _raw is None or len(_raw) == 0:
+            ce_error = "No hay datos M15 disponibles para este par ahorita (¿mercado cerrado?)."
+        else:
+            ce_base = _raw.tail(ce_nvelas)
+            _paso = ce_base.index.to_series().diff().median()
+            if pd.notna(_paso) and abs(_paso - pd.Timedelta("15min")) > pd.Timedelta("1min"):
+                ce_error = f"Los datos recibidos tienen resolución {_paso}, no 15min — el proveedor no entregó ese timeframe. Prueba con 'Usar datos simulados de prueba'."
+
+    if ce_error is None:
+        try:
+            ce_res = _confluence_cached(ce_base, ce_frames, ce_symbol, ce_cfg)
+        except Exception as e:
+            ce_error = f"{type(e).__name__}: {e}"
+
+    if ce_error:
+        st.error(f"⚠️ El Confluence Engine no pudo correr — la app y la estrategia actual siguen funcionando normal. Detalle: {ce_error}")
+    else:
+        _clase = ce_res['classification']
+        _color = '#4CAF82' if 'bullish' in _clase else '#C0392B' if 'bearish' in _clase else '#E0A800' if _clase == 'conflicting_context' else T['primary']
+        st.markdown(f'<div class="card"><div class="card-title">CLASIFICACIÓN GENERAL</div>'
+                    f'<span style="color:{_color};font-family:Cinzel,serif;font-size:1.3em;letter-spacing:2px;">{_clase.replace("_"," ").upper()}</span>'
+                    f'<br><span style="opacity:.8;font-size:.9em;">{ce_res["timestamp"]}</span></div>', unsafe_allow_html=True)
+        k1, k2, k3, k4, k5 = st.columns(5)
+        k1.metric("Puntuación bullish", ce_res['bullish_confluence_score'])
+        k2.metric("Puntuación bearish", ce_res['bearish_confluence_score'])
+        k3.metric("Evidencia en contra", ce_res['conflicting_evidence_score'])
+        k4.metric("Evidencias independientes", ce_res['evidence_count'])
+        k5.metric("Cobertura de datos", f"{ce_res['coverage'] * 100:.0f}%")
+        st.info(ce_res['explanation'])
+
+        def _tabla_ev(lista):
+            return pd.DataFrame([{
+                "evidencia": e.get("label"), "categoría": e.get("category"), "TF": (e.get("timeframe") or "—").upper(),
+                "puntos": round(e["points"], 2) if "points" in e else None, "fuerza": e.get("strength"),
+                "módulos": ", ".join(e.get("source_modules", [])) or "—"} for e in lista])
+
+        ca, cb = st.columns(2)
+        with ca:
+            st.markdown("**✅ Evidencias favorables**")
+            if ce_res['supporting_evidence']:
+                st.dataframe(_tabla_ev(ce_res['supporting_evidence']), use_container_width=True)
+            else:
+                st.caption("No detectado")
+        with cb:
+            st.markdown("**⚠️ Contradicciones / evidencia en contra**")
+            if ce_res['conflicting_evidence']:
+                st.dataframe(_tabla_ev(ce_res['conflicting_evidence']), use_container_width=True)
+            else:
+                st.caption("Ninguna detectada")
+        st.markdown("**❓ Evidencias faltantes** (la ausencia de datos NO cuenta ni a favor ni en contra)")
+        if ce_res['missing_evidence']:
+            st.markdown("\n".join(f"- {m_}" for m_ in ce_res['missing_evidence']))
+        else:
+            st.caption("Ninguna")
+
+        with st.expander("📊 Desglose por categoría y timeframe", expanded=True):
+            _filas = []
+            for _cat, _v in ce_res['breakdown'].items():
+                for _tf, _t in _v['by_timeframe'].items():
+                    _filas.append({"categoría": _cat, "timeframe": _tf.upper(), "peso disponible": _t['available_weight'],
+                                   "puntos alcistas": _t['bullish'], "puntos bajistas": _t['bearish'], "evidencias": ", ".join(_t['evidence_ids']) or "—"})
+            if _filas:
+                st.dataframe(pd.DataFrame(_filas), use_container_width=True)
+        with st.expander("🔁 Evidencias no sumadas por repetir un hecho (anti-duplicación)"):
+            if ce_res['dedupe_log']:
+                st.dataframe(pd.DataFrame(ce_res['dedupe_log']), use_container_width=True)
+            else:
+                st.caption("Ninguna evidencia repetida en esta lectura.")
+        with st.expander("ℹ️ Evidencia informativa (sin puntos)"):
+            for _i in ce_res['informational_evidence']:
+                st.markdown(f"- {_i['label']}")
+            if not ce_res['informational_evidence']:
+                st.caption("Ninguna")
+        with st.expander("📈 Historial de scores (últimas velas)"):
+            if st.checkbox("Calcular historial (tarda unos segundos)", value=False, key="ce_hist"):
+                try:
+                    _serie = _confluence_serie_cached(ce_base, ce_frames, ce_symbol, ce_cfg, 120)
+                    if len(_serie):
+                        st.line_chart(_serie.set_index("timestamp")[["bullish", "bearish", "conflicting"]])
+                        st.dataframe(_serie.tail(15), use_container_width=True)
+                except Exception as e:
+                    st.warning(f"No se pudo calcular el historial: {e}")
 
 # ── TAB 3: MULTI-TF (confluencia genérica, independiente de la estrategia principal) ──
 if st.session_state.page == 'multitf':
