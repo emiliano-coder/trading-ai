@@ -21,6 +21,7 @@ from core.order_blocks import analyze_order_blocks
 from core.multi_timeframe import analyze_multi_timeframe
 from core.setup_engine import detect_setups, setups_to_dataframe
 from core.confluence_engine import analyze_confluence, confluence_series
+from core.decision_engine import analyze_decision
 warnings.filterwarnings('ignore')
 
 st.set_page_config(page_title="MIMI-AI", page_icon="🏛️", layout="wide")
@@ -1024,7 +1025,7 @@ def monitor_automatico(par_seleccionado, stf_activo):
 # principal (barra superior con categorías). La sidebar es solo CONFIG.
 NAV_GROUPS = [
     ("Principal",    [("senal","Señal"), ("monitor","Monitor")]),
-    ("Análisis",     [("estructura","Estructura"), ("market_structure","Market Structure"), ("liquidity","Liquidity"), ("fvg","FVG"), ("order_blocks","Order Blocks"), ("multi_timeframe","Multi-Timeframe"), ("setup_engine","Setup Engine"), ("confluence_engine","Confluence Engine"), ("multitf","Multi-TF"), ("grafica","Gráfica")]),
+    ("Análisis",     [("estructura","Estructura"), ("market_structure","Market Structure"), ("liquidity","Liquidity"), ("fvg","FVG"), ("order_blocks","Order Blocks"), ("multi_timeframe","Multi-Timeframe"), ("setup_engine","Setup Engine"), ("confluence_engine","Confluence Engine"), ("decision_engine","Decision Engine"), ("multitf","Multi-TF"), ("grafica","Gráfica")]),
     ("Operar",       [("paper","Paper"), ("historial","Historial")]),
     ("Herramientas", [("chat","Chat"), ("alertas","Alertas"), ("backtest","Backtest")]),
 ]
@@ -2293,6 +2294,140 @@ if st.session_state.page == 'confluence_engine':
                         st.dataframe(_serie.tail(15), use_container_width=True)
                 except Exception as e:
                     st.warning(f"No se pudo calcular el historial: {e}")
+
+# ── PÁGINA — 🧭 Decision Engine (core/decision_engine.py) ─────────────
+# Sistema paralelo, solo informativo. SOLO consume el resultado del Confluence Engine. NO cambia el
+# BUY/SELL/WAIT del sistema anterior (generar_senal), ni calcular_score, Telegram, riesgo ni operaciones,
+# y NO está conectado a MT5/IBKR ni a ninguna ejecución. Score y etiqueta NO son probabilidad de ganar.
+if st.session_state.page == 'decision_engine':
+    st.markdown(f'<div style="font-family:Cinzel,serif;color:{T["primary"]};font-size:1.1em;letter-spacing:2px;margin-bottom:2px;">🧭 Decision Engine</div>', unsafe_allow_html=True)
+    st.caption(f"Motor nuevo e independiente (`core/decision_engine.py`) · {PAR} · Lee el resultado del Confluence Engine y decide BUY / SELL / WAIT con sus razones. "
+               "**Es informativo y NO es la señal de MIMI**: no cambia el BUY/SELL/WAIT anterior, ni el score, ni Telegram, ni la gestión de riesgo, y no ejecuta operaciones. "
+               "El score y la etiqueta de confianza miden coincidencia y consistencia de evidencias — **NO son una probabilidad de ganar**.")
+
+    de_demo = st.checkbox("Usar datos simulados de prueba", value=False, key="de_demo")
+    d_c1, d_c2 = st.columns(2)
+    with d_c1:
+        de_swing = st.slider("Sensibilidad del swing (Confluence)", 2, 10, 2 if de_demo else 5, key="de_swing")
+    with d_c2:
+        de_setup = st.selectbox("Setup mínimo exigido", ["confirmed", "candidate", "ninguno"], index=0, key="de_setup",
+                                help="Estado mínimo del Setup Engine en la dirección de la decisión. 'ninguno' no exige setup.")
+    with st.expander("⚙️ Umbrales de decisión (valores de diseño, NO optimizados para rentabilidad)"):
+        e1, e2, e3, e4 = st.columns(4)
+        de_min_score = e1.number_input("Score mínimo", 0, 100, 50, 5, key="de_min_score")
+        de_min_cov = e2.number_input("Cobertura mínima (%)", 0, 100, 75, 5, key="de_min_cov")
+        de_max_conf = e3.number_input("Evidencia en contra máx.", 0, 100, 20, 5, key="de_max_conf")
+        de_min_al = e4.number_input("Alineación mínima", 0, 100, 70, 5, key="de_min_al")
+        f1, f2, f3, f4 = st.columns(4)
+        de_age = f1.number_input("Vigencia (min)", 1, 1440, 30, 5, key="de_age")
+        de_min_ev = f2.number_input("Evidencias a favor mín.", 0, 20, 4, 1, key="de_min_ev")
+        de_pen = f3.number_input("Penalización por oposición", 0.0, 3.0, 0.5, 0.1, key="de_pen")
+        de_near = f4.checkbox("Exigir precio cerca de la zona", value=False, key="de_near",
+                              help="Evita mantener un BUY/SELL cuando el precio ya se alejó de la zona del setup.")
+
+    de_cfg = dict(min_score=float(de_min_score), min_coverage=de_min_cov / 100.0, max_conflicting_score=float(de_max_conf),
+                  min_alignment_score=float(de_min_al), max_age_minutes=float(de_age), min_supporting_evidence=int(de_min_ev),
+                  conflict_penalty=float(de_pen), require_price_near_zone=bool(de_near),
+                  min_setup_status=None if de_setup == "ninguno" else de_setup)
+    ce_cfg2 = dict(swing_order=de_swing, equal_tolerance_pct=0.1 if de_demo else 0.05)
+    de_error, de_conf, de_dec, de_base, de_frames, de_symbol = None, None, None, None, None, PC['td_symbol'].replace("/", "")
+    de_offset = None
+    if de_demo:
+        from core.confluence_engine import _escenarios_confluencia
+        _esc = _escenarios_confluencia()
+        de_nombre = st.selectbox("Escenario simulado", list(_esc.keys()), key="de_escenario")
+        de_frames, de_symbol = _esc[de_nombre]["frames"], _esc[de_nombre]["symbol"]
+        ce_cfg2.update({k: v for k, v in _esc[de_nombre]["config"].items() if k != "swing_order"})
+        ce_cfg2["swing_order"] = de_swing
+        _ofs = {"Al momento de la lectura": 0, "+15 min": 15, "+30 min (límite de vigencia)": 30,
+                "+45 min (lectura vencida)": 45, "−15 min (la lectura sería del futuro)": -15}
+        de_offset = _ofs[st.selectbox("Momento de la decisión (as_of)", list(_ofs.keys()), key="de_asof")]
+        st.caption("Datos y contexto simulados (no son precios reales). `as_of` se mide respecto a la hora de la lectura para ver la vigencia y el bloqueo de información futura.")
+    else:
+        de_n = st.slider("Velas M15 a analizar", 200, 1500, 600, step=50, key="de_n")
+        de_now = st.checkbox("Verificar vigencia con la hora actual (as_of = ahora, UTC)", value=True, key="de_now",
+                             help="Si los datos son viejos (p. ej. mercado cerrado) la lectura estará vencida y la decisión será WAIT.")
+        _raw = get_data(PC['yf_symbol'], "15m", "30d")
+        if _raw is None or len(_raw) == 0:
+            de_error = "No hay datos M15 disponibles para este par ahorita (¿mercado cerrado?)."
+        else:
+            de_base = _raw.tail(de_n)
+            _paso = de_base.index.to_series().diff().median()
+            if pd.notna(_paso) and abs(_paso - pd.Timedelta("15min")) > pd.Timedelta("1min"):
+                de_error = f"Los datos recibidos tienen resolución {_paso}, no 15min — el proveedor no entregó ese timeframe. Prueba con 'Usar datos simulados de prueba'."
+
+    if de_error is None:
+        try:
+            de_conf = _confluence_cached(de_base, de_frames, de_symbol, ce_cfg2)
+            if de_demo:
+                _ts = pd.Timestamp(de_conf["timestamp"]) if de_conf.get("timestamp") is not None else None
+                de_asof = (_ts + pd.Timedelta(minutes=de_offset)) if _ts is not None else None
+            else:
+                de_asof = pd.Timestamp.now(tz="UTC") if de_now else None
+            de_dec = analyze_decision(de_conf, de_cfg, as_of=de_asof)
+        except Exception as e:
+            de_error = f"{type(e).__name__}: {e}"
+
+    if de_error:
+        st.error(f"⚠️ El Decision Engine no pudo correr — la app y la estrategia actual siguen funcionando normal. Detalle: {de_error}")
+    else:
+        _dc = {"BUY": "#4CAF82", "SELL": "#C0392B", "WAIT": "#E0A800"}[de_dec['decision']]
+        _dir = {"bullish": "alcista", "bearish": "bajista"}.get(de_dec['direction'], "sin dirección")
+        st.markdown(f'<div class="card"><div class="card-title">DECISIÓN (informativa — independiente de la señal anterior)</div>'
+                    f'<span style="color:{_dc};font-family:Cinzel,serif;font-size:2em;letter-spacing:4px;">{de_dec["decision"]}</span>'
+                    f'<span style="margin-left:16px;opacity:.85;">dirección: {_dir}</span>'
+                    f'<br><span style="opacity:.8;font-size:.9em;">lectura: {de_dec["timestamp"]} · as_of: {de_dec["as_of"]}'
+                    + (f' · válida hasta: {de_dec["valid_until"]}' if de_dec.get("valid_until") is not None else '') + '</span></div>', unsafe_allow_html=True)
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Score de decisión", de_dec['decision_score'])
+        m2.metric("Etiqueta de confianza", de_dec['confidence_label'])
+        m3.metric("Score alcista / bajista", f"{de_dec['scores']['bullish']} / {de_dec['scores']['bearish']}")
+        m4.metric("Cobertura de datos", f"{de_dec['scores']['coverage'] * 100:.0f}%")
+        st.caption("La etiqueta de confianza (LOW/MEDIUM/HIGH) resume la calidad y consistencia de las evidencias; en WAIT siempre es LOW. NO es la probabilidad de ganar.")
+        if de_dec['input_status'] != 'ok':
+            st.warning(f"Entrada descartada ({de_dec['input_status']}): " + de_dec['reasons'][0])
+
+        st.markdown("**🗒️ Razones**")
+        st.markdown("\n".join(f"- {r_}" for r_ in de_dec['reasons']))
+        if de_dec['gates']:
+            with st.expander("🚦 Condiciones evaluadas (todas deben cumplirse para BUY/SELL)", expanded=True):
+                st.dataframe(pd.DataFrame([{"condición": g_['name'], "cumple": "✅" if g_['passed'] else ("⛔" if g_['applicable'] else "—"),
+                                            "valor": str(g_['value']), "umbral": str(g_['threshold']), "detalle": g_['detail']} for g_ in de_dec['gates']]),
+                             use_container_width=True)
+        ca, cb = st.columns(2)
+        with ca:
+            st.markdown("**✅ Evidencias a favor**")
+            if de_dec['supporting_evidence']:
+                st.dataframe(pd.DataFrame([{"evidencia": e_.get("label"), "TF": (e_.get("timeframe") or "—").upper(), "puntos": round(e_.get("points") or 0, 2)}
+                                           for e_ in de_dec['supporting_evidence']]), use_container_width=True)
+            else:
+                st.caption("Ninguna")
+        with cb:
+            st.markdown("**⚠️ Evidencias en contra / contradicciones**")
+            if de_dec['conflicting_evidence']:
+                st.dataframe(pd.DataFrame([{"evidencia": e_.get("label"), "TF": (e_.get("timeframe") or "—").upper(), "puntos": round(e_.get("points") or 0, 2)}
+                                           for e_ in de_dec['conflicting_evidence']]), use_container_width=True)
+            else:
+                st.caption("Ninguna")
+        cc, cd = st.columns(2)
+        with cc:
+            st.markdown("**❓ Condiciones faltantes**")
+            st.markdown("\n".join(f"- {m_}" for m_ in de_dec['missing_conditions']) if de_dec['missing_conditions'] else "- Ninguna")
+        with cd:
+            st.markdown("**🛑 Condiciones de invalidación**")
+            st.markdown("\n".join(f"- {m_}" for m_ in de_dec['invalidation_conditions']) if de_dec['invalidation_conditions']
+                        else "- No aplica (la decisión es WAIT: no hay nada que invalidar)")
+        if de_dec['confidence_factors']:
+            with st.expander("🏷️ De dónde sale la etiqueta de confianza"):
+                st.dataframe(pd.DataFrame([{"factor": k_, "cumple": "✅" if v_['passed'] else "—", "detalle": v_['detail']} for k_, v_ in de_dec['confidence_factors'].items()]),
+                             use_container_width=True)
+        if de_dec['evidence_by_module']:
+            with st.expander("🧩 Aporte de cada módulo (leído a través del Confluence Engine)"):
+                st.dataframe(pd.DataFrame([{"módulo/categoría": k_, "puntos alcistas": v_['bullish_points'], "puntos bajistas": v_['bearish_points'],
+                                            "peso disponible": v_['available_weight']} for k_, v_ in de_dec['evidence_by_module'].items()]), use_container_width=True)
+        with st.expander("🔧 Configuración usada"):
+            st.json(de_dec['config_used'])
+        st.caption(de_dec['disclaimer'])
 
 # ── TAB 3: MULTI-TF (confluencia genérica, independiente de la estrategia principal) ──
 if st.session_state.page == 'multitf':
